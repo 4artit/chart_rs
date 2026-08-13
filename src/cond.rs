@@ -1,29 +1,27 @@
-//! 3치 논리. `Unknown`은 "api 조회가 실패해서 모른다"를 뜻한다.
+//! Three-valued logic. `Unknown` means "a lookup failed, so this is undecidable".
 //!
-//! `bool`로 뭉개면 실패 정책이 조건 노드 안에 숨는다. 3치로 두면
-//! 정책이 [`crate::fsm::Edge::unknown`]에 명시되어 다이어그램에 나온다.
+//! Collapsing that case into `bool` hides the failure policy inside the guard.
+//! Keeping it separate moves the policy out to [`crate::OnUnknown`], where the
+//! diagram can show it.
 
-/// 조건 평가 결과.
+/// The result of evaluating a guard.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Cond {
     True,
     False,
-    /// 조회 실패 등으로 판정 불가.
+    /// Undecidable, e.g. a failed lookup.
     Unknown,
 }
 
 impl From<bool> for Cond {
     fn from(b: bool) -> Self {
-        if b {
-            Self::True
-        } else {
-            Self::False
-        }
+        if b { Self::True } else { Self::False }
     }
 }
 
 impl Cond {
-    /// Kleene AND. `False`가 하나라도 있으면 `False` — 이게 fail-safe 조합을 만든다.
+    /// Kleene AND. A single `False` wins, which is what makes combinations
+    /// fail-safe.
     pub const fn and(self, other: Self) -> Self {
         match (self, other) {
             (Self::False, _) | (_, Self::False) => Self::False,
@@ -41,7 +39,7 @@ impl Cond {
         }
     }
 
-    /// Kleene NOT. `Unknown`의 부정은 `Unknown`이다.
+    /// Kleene NOT. The negation of `Unknown` is `Unknown`.
     pub const fn not(self) -> Self {
         match self {
             Self::True => Self::False,

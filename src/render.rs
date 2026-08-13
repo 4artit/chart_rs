@@ -1,33 +1,36 @@
-//! 같은 표에서 산출물을 뽑는다 — mermaid 다이어그램과 전수 커버리지 매트릭스.
+//! Artifacts derived from the transition table: a mermaid diagram and an
+//! exhaustive coverage matrix.
 
 use std::any::TypeId;
 use std::fmt::Write as _;
 
 use super::{Domain, Edge, Goto, Ignore, OnUnknown};
 
-/// `(상태 × 이벤트)` 전수 검사 결과.
+/// The result of checking every `(state × event kind)` combination.
 #[derive(Debug, Default)]
 pub struct Coverage {
-    /// 엣지도 `ignore`도 없는 조합. **CI에서 0이어야 한다.**
+    /// Combinations with neither an edge nor an [`Ignore`]. **Must be empty in
+    /// CI.**
     pub holes: Vec<(String, String)>,
-    /// 같은 조합에 엣지가 2개 이상인 경우. 선언 순서가 우선순위이므로
-    /// 반드시 오류는 아니지만 리뷰 대상이다.
+    /// Combinations matched by more than one edge. Not necessarily wrong, since
+    /// declaration order is priority, but worth reviewing.
     pub overlaps: Vec<(String, String, Vec<&'static str>)>,
-    /// 도달 불가 상태.
+    /// States that cannot be reached from the initial state.
     pub unreachable: Vec<String>,
-    /// 이름이 겹치는 조건 노드. Memo 키가 이름이므로 유일해야 한다.
+    /// Guard node names used by more than one node type. The [`super::Memo`] key
+    /// is the name, so names must be unique.
     pub duplicate_node_names: Vec<&'static str>,
 }
 
 impl Coverage {
+    /// Whether the table is free of defects. `overlaps` is excluded: it is a
+    /// review signal, not an error.
     pub fn is_clean(&self) -> bool {
-        self.holes.is_empty()
-            && self.unreachable.is_empty()
-            && self.duplicate_node_names.is_empty()
+        self.holes.is_empty() && self.unreachable.is_empty() && self.duplicate_node_names.is_empty()
     }
 }
 
-/// 표를 검사한다.
+/// Checks the transition table.
 pub fn coverage<D: Domain>(
     initial: D::Tag,
     edges: &'static [Edge<D>],
@@ -54,11 +57,11 @@ pub fn coverage<D: Domain>(
         }
     }
 
-    // Tag는 Hash를 요구하지 않으므로(Copy + Eq + Debug만 요구) 문자열 대신
-    // 선형 탐색으로 비교한다 — 상태 개수가 작아 부담이 없고, Debug 출력이
-    // 우연히 겹치는 두 상태를 같은 상태로 오판하는 일도 없앤다.
+    // Tag is only required to be Copy + Eq + Debug, not Hash, so reachability uses
+    // a linear scan. State counts are small, and this avoids treating two states
+    // with coincidentally equal Debug output as the same state.
     let mut reached: Vec<D::Tag> = vec![initial];
-    // 고정점까지 반복 — 엣지 수가 작아 단순 반복으로 충분하다.
+    // Iterate to a fixed point; tables are small enough that this is fine.
     loop {
         let before = reached.len();
         for e in edges {
@@ -79,13 +82,14 @@ pub fn coverage<D: Domain>(
         }
     }
 
-    // 같은 노드를 여러 엣지에서 쓰는 건 정상이다. 잡아야 하는 것은
-    // **이름은 같은데 타입이 다른** 노드다 — Memo 키가 이름이므로 서로의 캐시를 오염시킨다.
+    // Reusing one node across many edges is normal. What must be caught is two
+    // *different* node types sharing a name, since they would then share a Memo
+    // entry and poison each other's cached result.
     let mut ids: Vec<(&'static str, TypeId)> = Vec::new();
     for e in edges {
         e.check.node_ids(&mut ids);
     }
-    ids.sort_unstable_by_key(|(n, _)| *n);
+    ids.sort_unstable();
     ids.dedup();
     for w in ids.windows(2) {
         if w[0].0 == w[1].0 && !out.duplicate_node_names.contains(&w[0].0) {
@@ -96,10 +100,16 @@ pub fn coverage<D: Domain>(
     out
 }
 
-/// mermaid `stateDiagram-v2` 문자열을 만든다.
+/// Builds a mermaid `stateDiagram-v2` string.
 ///
-/// `Goto::Internal` 엣지는 기본적으로 생략한다 — 상태를 바꾸지 않는 전이가
-/// self-loop로 그려지면 다이어그램을 읽을 수 없게 된다. 대신 [`internal_table`]로 뽑는다.
+/// [`Goto::Internal`] edges are omitted: drawing state-preserving transitions as
+/// self-loops makes the diagram unreadable. Use [`internal_table`] for those.
+///
+/// Entry and exit actions do not appear here. They are pushed by code at runtime
+/// rather than declared as static data, so they cannot be read from the table.
+///
+/// The output converts to PlantUML almost line for line; see
+/// `scripts/mermaid_to_plantuml.sh`.
 pub fn to_mermaid<D: Domain>(initial: D::Tag, edges: &'static [Edge<D>]) -> String {
     let mut s = String::from("stateDiagram-v2\n");
     let _ = writeln!(s, "    [*] --> {initial:?}");
@@ -130,9 +140,9 @@ pub fn to_mermaid<D: Domain>(initial: D::Tag, edges: &'static [Edge<D>]) -> Stri
     s
 }
 
-/// 상태를 바꾸지 않는 전이를 표로 뽑는다.
+/// Tabulates the transitions that do not change state.
 pub fn internal_table<D: Domain>(edges: &'static [Edge<D>]) -> String {
-    let mut s = String::from("| 상태 | 이벤트 | 조건 | 액션 | edge id |\n|---|---|---|---|---|\n");
+    let mut s = String::from("| state | event | guard | actions | edge id |\n|---|---|---|---|---|\n");
     for e in edges {
         if !matches!(e.goto, Goto::Internal) {
             continue;
@@ -147,6 +157,19 @@ pub fn internal_table<D: Domain>(edges: &'static [Edge<D>]) -> String {
                 join_actions(e.run),
                 e.id
             );
+        }
+    }
+    s
+}
+
+/// Tabulates the deliberately unhandled combinations and their reasons.
+pub fn ignore_table<D: Domain>(ignores: &'static [Ignore<D>]) -> String {
+    let mut s = String::from("| state | event | reason |\n|---|---|---|\n");
+    for i in ignores {
+        for from in i.from.expand() {
+            for kind in i.when {
+                let _ = writeln!(s, "| `{from:?}` | `{kind:?}` | {} |", i.why);
+            }
         }
     }
     s

@@ -1,32 +1,34 @@
-//! 조건 노드와 조건식 트리.
+//! Guard nodes and the guard expression tree.
 
 use std::any::Any;
 use std::cell::RefCell;
 
 use super::{Cond, Domain, StateNode};
 
-/// 전이 조건 하나.
+/// One transition guard.
 ///
-/// **내부 상태를 가질 수 없다.** `eval`이 `&self`를 받고 노드가 `&'static`으로
-/// 보관되므로, 필요한 모든 입력은 [`Cx`]로 주입된다. 이 규약 덕분에
-/// [`Memo`] 캐시가 안전하고 노드가 순수 함수로 테스트된다.
+/// A guard **cannot own state**: `eval` takes `&self` and nodes are held as
+/// `&'static`, so every input arrives through [`Cx`]. That rule is what makes the
+/// [`Memo`] cache sound and lets a node be tested as a pure function.
 pub trait CondNode<D: Domain>: Sync + Any {
-    /// 다이어그램·로그에 찍히는 이름. **머신 안에서 유일해야 한다** (Memo 키).
+    /// The name shown in diagrams and logs. It must be **unique within a
+    /// machine**, since it is the [`Memo`] key.
     ///
-    /// 유일성은 [`super::render::coverage`]가 검사한다.
+    /// [`super::render::coverage`] verifies uniqueness.
     fn name(&self) -> &'static str;
 
-    /// 조건을 판정한다. 세상을 변경해서는 안 된다.
+    /// Evaluates the guard. Must not modify the world.
     fn eval(&self, cx: &Cx<'_, D>) -> Cond;
 }
 
-/// 조건 노드에 주입되는 입력.
+/// The inputs handed to a guard node.
 pub struct Cx<'a, D: Domain> {
-    /// 이벤트 payload.
+    /// The event, including payload.
     pub event: &'a D::Event,
-    /// 바깥 세상 — 읽기 전용.
+    /// The outside world, read-only.
     pub world: &'a D::Env,
-    /// 현재 상태 노드. **태그로 분기하지 말고 변수만 읽어라.**
+    /// The current state node. Read its variables rather than branching on its
+    /// tag — the edge's `from` has already fixed the state.
     pub state: &'a dyn StateNode<D>,
     memo: &'a Memo,
 }
@@ -46,18 +48,21 @@ impl<'a, D: Domain> Cx<'a, D> {
         }
     }
 
-    /// 현재 상태 노드를 구체 타입으로 본다. 다른 상태면 `None`.
+    /// Views the current state node as a concrete type, or `None` if the machine
+    /// is in a different state.
     ///
-    /// 엣지의 `from`이 이미 상태를 확정했으므로 호출부에서는 안전하다.
+    /// Only the current state's node is reachable; other states' nodes are not
+    /// exposed anywhere.
     pub fn state_as<S: StateNode<D>>(&self) -> Option<&S> {
         self.state.as_any().downcast_ref::<S>()
     }
 }
 
-/// dispatch 1회 동안만 유효한 조건 평가 캐시.
+/// Guard evaluation cache, valid for the duration of one dispatch.
 ///
-/// 같은 `(상태, 이벤트)`에 엣지가 여러 개면 동일 노드가 여러 번 평가된다.
-/// 캐시가 없으면 **한 번의 이벤트 처리 안에서 세상이 두 개가 될 수 있다.**
+/// When several edges share a `(state, event kind)` the same node is evaluated
+/// more than once. Without the cache a single event could observe two different
+/// worlds.
 #[derive(Default)]
 pub struct Memo {
     cache: RefCell<Vec<(&'static str, Cond)>>,
@@ -81,9 +86,9 @@ impl Memo {
     }
 }
 
-/// 조건식 트리. `check!` 매크로가 이 형태로 전개한다.
+/// A guard expression tree. [`check!`] expands to this shape.
 pub enum Expr<D: Domain> {
-    /// 조건 없음 — 항상 참.
+    /// No guard: always true.
     Always,
     Node(&'static dyn CondNode<D>),
     And(&'static Expr<D>, &'static Expr<D>),
@@ -92,7 +97,8 @@ pub enum Expr<D: Domain> {
 }
 
 impl<D: Domain> Expr<D> {
-    /// 트리를 평가한다. `And`/`Or`는 **단축평가**하므로 불필요한 api 호출이 없다.
+    /// Evaluates the tree. `And` and `Or` **short-circuit**, so no unnecessary
+    /// lookups are performed.
     pub fn eval(&self, cx: &Cx<'_, D>) -> Cond {
         match self {
             Self::Always => Cond::True,
@@ -117,18 +123,24 @@ impl<D: Domain> Expr<D> {
         }
     }
 
-    /// 다이어그램용 문자열. `A && !B` 형태로 되돌린다.
+    /// Renders the expression for diagrams, e.g. `A && !B`.
+    ///
+    /// `Not` is parenthesised so that `!(A && B)` does not read as `!A && B`.
     pub fn render(&self) -> String {
         match self {
             Self::Always => String::new(),
             Self::Node(n) => n.name().to_owned(),
             Self::And(l, r) => format!("{} && {}", l.render(), r.render()),
             Self::Or(l, r) => format!("({} || {})", l.render(), r.render()),
-            Self::Not(x) => format!("!{}", x.render()),
+            Self::Not(x) => match x {
+                Self::Node(n) => format!("!{}", n.name()),
+                other => format!("!({})", other.render()),
+            },
         }
     }
 
-    /// 이 식이 참조하는 모든 노드의 `(이름, 타입)`. 이름 유일성 검사에 쓴다.
+    /// Collects `(name, type)` for every node this expression references, for the
+    /// name-uniqueness check.
     pub fn node_ids(&self, out: &mut Vec<(&'static str, std::any::TypeId)>) {
         match self {
             Self::Always => {}
@@ -142,7 +154,7 @@ impl<D: Domain> Expr<D> {
     }
 }
 
-/// 조건 노드를 선언한다. 유닛 구조체 + `CondNode` 구현을 만든다.
+/// Declares a guard node as a unit struct plus its [`CondNode`] impl.
 ///
 /// ```ignore
 /// cond_node!(RearCam, GearIsReverse, |cx| match cx.event {
@@ -167,11 +179,11 @@ macro_rules! cond_node {
     };
 }
 
-/// 조건식을 만든다. `&&` 체인과 앞선 `!`를 지원한다.
+/// Builds a guard expression. Supports `&&` chains and a leading `!`.
 ///
-/// `||` 조합까지 지원하면 매크로 규칙이 훨씬 복잡해지는 데 비해 실전에서
-/// 쓰이는 빈도는 낮아 의도적으로 뺐다. 필요하면 [`Expr::Or`]를 직접 쓰거나
-/// proc-macro 버전으로 확장한다.
+/// `||` is deliberately omitted: supporting it complicates the macro rules well
+/// out of proportion to how often it is needed. Use [`Expr::Or`] directly when
+/// required.
 #[macro_export]
 macro_rules! check {
     () => { &$crate::Expr::Always };

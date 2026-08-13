@@ -43,14 +43,15 @@ fsm = { path = "../fsm" }
 use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, StateNode};
 
 // 1. Domain — 컨트롤러가 쓸 타입들을 한 곳에 묶는다.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Tag { Off, On }
+//    tags!/events! 가 enum과 커버리지용 전수 목록을 함께 만든다.
+fsm::tags! {
+    enum Tag { Off, On }
+}
 
-#[derive(Clone, Debug)]
-enum Event { Toggle }
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Kind { Toggle }
+fsm::events! {
+    #[derive(Clone, Debug)]
+    enum Event => Kind { Toggle }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Action { TurnOn, TurnOff }
@@ -65,19 +66,14 @@ impl Domain for Light {
     type Action = Action;
     type Env = Env;
 
-    fn kind(ev: &Event) -> Kind {
-        match ev { Event::Toggle => Kind::Toggle }
-    }
-
-    fn perform(action: Action, _state: &dyn StateNode<Self>, _world: &mut Env) {
+    // perform 이 유일한 필수 메서드다.
+    // kind / all_tags / all_kinds 는 tags!/events! 가 만든 구현으로 해결된다.
+    fn perform(action: Action, _ev: &Event, _state: &dyn StateNode<Self>, _world: &mut Env) {
         match action {
             Action::TurnOn => println!("on"),
             Action::TurnOff => println!("off"),
         }
     }
-
-    fn all_tags() -> &'static [Tag] { &[Tag::Off, Tag::On] }
-    fn all_kinds() -> &'static [Kind] { &[Kind::Toggle] }
 }
 
 // 2. 상태 — 진입/이탈 액션은 state! 매크로로 선언한다.
@@ -130,21 +126,82 @@ fn main() {
 
 ```rust
 pub trait Domain: Sized + 'static {
-    type Tag: Copy + Eq + Debug + 'static;   // 상태 식별자 (값은 StateNode가 가짐)
-    type Event;                                  // 이벤트 본체 (payload 포함)
-    type EventKind: Copy + Eq + Debug + 'static; // 이벤트 종류 — 엣지가 이걸로 매칭
-    type Action: Copy + Debug + 'static;      // 동작 — 데이터로 표현해야 이름이 산출물에 찍힘
-    type Env: ?Sized;                       // 바깥 세상 (api + DB)
+    type Tag: Enumerable;                        // 상태 식별자 (값은 StateNode가 가짐)
+    // 이벤트 본체 (payload 포함). Debug 는 dispatch 로그가 payload 를 담기 위해 필요하다.
+    type Event: HasKind<Kind = Self::EventKind> + Debug;
+    type EventKind: Enumerable;                  // 이벤트 종류 — 엣지가 이걸로 매칭
+    type Action: Copy + Debug + 'static; // 동작 — 데이터로 표현해야 이름이 산출물에 찍힘
+    type Env: ?Sized;                    // 바깥 세상 (api + DB)
 
-    fn kind(ev: &Self::Event) -> Self::EventKind;
-    fn perform(action: Self::Action, state: &dyn StateNode<Self>, world: &mut Self::Env);
-    fn all_tags() -> &'static [Self::Tag];    // 커버리지 검사용 전체 상태 목록
-    fn all_kinds() -> &'static [Self::EventKind]; // 커버리지 검사용 전체 이벤트 종류 목록
+    // 유일한 필수 메서드.
+    fn perform(action: Self::Action, ev: &Self::Event,
+               state: &dyn StateNode<Self>, world: &mut Self::Env);
+
+    // 커버리지 검사용 전수 목록. Enumerable::ALL 을 쓰는 기본 구현이 있으므로
+    // 일부만 검사하고 싶을 때만 재정의한다.
+    fn all_tags() -> &'static [Self::Tag] { ... }
+    fn all_kinds() -> &'static [Self::EventKind] { ... }
 }
 ```
 
-`perform` 안에서 `Machine::dispatch`를 재호출하면 안 된다 — 재진입을 막기
-위해 이벤트를 발생시키려면 액션 실행 이후 `Machine::post`로 큐에 넣는다.
+이벤트→종류 매핑은 `Domain`이 아니라 `HasKind`에만 있다. 매핑이 두 곳에 있으면
+서로 어긋날 수 있으므로 진입점을 하나로 뒀다.
+
+`Tag`와 `EventKind`는 `Enumerable`(= `Copy + Eq + Debug + 'static` + `const ALL`)을
+요구한다. 커버리지 검사가 `(상태 × 이벤트)`를 전수 순회하려면 두 축의 값 목록이
+필요한데, 그 목록을 손으로 관리하면 **변형을 추가하고 목록에 넣는 걸 깜빡했을 때
+그 조합이 조용히 검사에서 빠진다** — 구멍을 잡는 장치 자체에 구멍이 생긴다.
+그래서 enum과 목록을 한 선언에서 만드는 매크로를 쓴다.
+
+```rust
+fsm::tags! {
+    enum Tag { Locked, Unlocked, Alarm, Maintenance }
+}
+
+fsm::events! {
+    #[derive(Clone, Debug)]
+    enum Event => Kind {
+        EnterCode(u32),   // payload 있는 변형
+        Timeout,          // 없는 변형 — 섞어 써도 된다
+        Reset,
+        MaintenanceToggle,
+    }
+}
+```
+
+`events!` 하나가 네 가지를 만든다. 손으로 쓰면 이 넷을 동기화해야 한다.
+
+| 생성물 | 용도 |
+|---|---|
+| `enum Event` | payload를 가진 본체. 속성(`#[derive(..)]` 등)은 그대로 전달된다 |
+| `enum Kind` | payload 없는 태그. `Copy + Eq + Debug` 자동 derive |
+| `impl HasKind for Event` | `kind()` 기본 구현이 사용 |
+| `impl Enumerable for Kind` | `all_kinds()` 기본 구현이 사용 |
+
+그래서 `Domain` 구현에 남는 것은 **연관 타입 5개와 `perform` 하나**다.
+
+여러 이벤트 변형을 한 종류로 묶고 싶으면(N:1 매핑) 매크로 대신 `HasKind`를 직접
+구현한다. `Event`가 외부 크레이트 타입이라 고아 규칙에 걸리면 newtype으로 감싼다.
+
+`perform`은 **`Env`를 변경할 수 있는 유일한 지점이다** — 상태 노드와 조건
+노드는 `&Env`만 받으므로 읽기만 한다. 그래서 이 컨트롤러가 바깥 세상에 하는
+모든 변경은 `Action` 값을 거치고, 실행된 액션은 `Taken::actions`에 이름으로
+남는다. `perform`은 `Machine`에 접근할 수 없어 전이를 유발할 수는 없다.
+
+`ev`는 처리 중인 이벤트다. `Edge::run`은 `&'static`이라 컴파일 타임 상수만
+담을 수 있으므로, 런타임 값이 필요한 액션은 여기서 `ev`에서 꺼낸다.
+`Goto::Internal` 전이는 `on_enter`/`on_exit`가 돌지 않으니 **payload에 접근할
+수 있는 유일한 경로**이기도 하다.
+
+```rust
+// 표에는 상수만 (다이어그램에 이름이 찍힌다)
+run: &[Action::RecordPosition],
+
+// 값은 perform 에서 이벤트로부터 꺼낸다
+Action::RecordPosition => {
+    if let Event::PositionChanged(p) = ev { world.record_position(*p); }
+}
+```
 
 ### 2. 상태 — `StateNode` / `state!`
 
@@ -250,14 +307,21 @@ m.dispatch(&event, &mut world); // -> Option<Taken>
 없으면 `None`을 반환하고, `Ignore`에도 안 걸리면 `log::warn!`을 남긴다
 (로그를 보려면 `env_logger` 등 로거를 초기화해야 한다).
 
-액션이 새 이벤트를 만들어야 하면(예: 다른 전이를 트리거) `perform` 안에서
-바로 `dispatch`를 다시 부르지 말고 `Machine::post`로 큐에 넣는다. 큐는
-`Machine::pump`로 한꺼번에 소진한다 — 이렇게 하면 전이 하나가 완전히 끝난
-뒤에만 다음 이벤트가 처리되어 재진입이 구조적으로 불가능해진다.
+`Machine`의 가변 상태는 **현재 태그와 상태 노드들뿐이고 이벤트 큐가 없다.**
+재진입은 큐가 아니라 borrow checker가 막는다 — `dispatch`가 도는 동안 `m`이
+`&mut`로 대출되어 중첩 호출이 컴파일되지 않고, `Domain::perform`은 `Machine`에
+접근할 방법이 없다.
+
+후속 이벤트가 필요하면(예: 한 전이가 다른 전이를 유발) 호출부가 큐를 갖는다.
+그러면 전이마다 `Taken`을 확인하면서 다음 이벤트를 결정할 수 있다.
 
 ```rust
-m.post(다른_이벤트);
-m.pump(&mut world);
+let mut pending = VecDeque::from([첫_이벤트]);
+while let Some(ev) = pending.pop_front() {
+    if let Some(taken) = m.dispatch(&ev, &mut world) {
+        // taken.edge / taken.actions 를 보고 후속 이벤트를 pending에 넣는다
+    }
+}
 ```
 
 ### 6. 산출물 — `render`
@@ -291,6 +355,28 @@ assert!(cov.is_clean()); // holes / unreachable / duplicate_node_names 가 모�
 CI/테스트에 `cov.is_clean()`을 assert 해 두면, 새 상태나 이벤트를 추가하고
 처리를 깜빡했을 때 컴파일이 아니라 테스트에서 바로 잡힌다.
 
+### PlantUML로 변환
+
+mermaid `stateDiagram-v2`와 PlantUML 상태도는 문법이 거의 같다 — `[*] --> X`와
+`A --> B`가 그대로 통하고 헤더·레이블 구분자·줄바꿈만 다르다. 그래서 다이어그램
+생성기를 하나 더 두는 대신 변환 스크립트를 쓴다.
+
+```sh
+scripts/mermaid_to_plantuml.sh example/door_lock.md > example/door_lock.puml
+
+# 이미지로 바로 뽑을 때
+scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > fsm.png
+```
+
+마크다운 파일(```mermaid 펜스 포함)과 생 다이어그램 모두 받고, 인자가 없으면
+표준 입력을 읽는다. 변환 내용은 세 줄뿐이다.
+
+| mermaid | PlantUML |
+|---|---|
+| `stateDiagram-v2` | `@startuml` + `hide empty description` … `@enduml` |
+| `A --> B: label` | `A --> B : label` |
+| `<br/>` | `\n` |
+
 ## 프로젝트 구조
 
 ```
@@ -298,6 +384,7 @@ src/
   lib.rs          // Domain 트레이트 + 모듈 재노출 — 라이브러리 진입점
   main.rs         // 사용 예제 (도어락 데모, cargo run으로 실행)
   cond.rs         // Cond (3치 논리)
+  enums.rs        // Enumerable, tags!/events! 매크로
   node.rs         // CondNode, Cx, Expr, Memo, cond_node!/check! 매크로
   state.rs        // StateNode, state! 매크로
   edge.rs         // Edge, Source, Goto, OnUnknown, Ignore

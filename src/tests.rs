@@ -1,30 +1,32 @@
-//! 프레임워크 자체 테스트.
+//! Tests for the framework itself.
 //!
-//! README의 "빠른 시작" 절 예제보다 조금 더 복합적인 후방 카메라 컨트롤러를
-//! 예제로 프레임워크 전체 기능을 검증한다.
+//! Uses a reverse-camera controller, slightly richer than the README quick-start
+//! example, to exercise every feature.
 
-use super::{render, Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, StateNode};
+// The fixture's event names read better with the shared `Changed` suffix, and
+// `events!` emits the same variant names for both enums.
+#![allow(clippy::enum_variant_names)]
 
-// ─────────────────────────────────────────── 도메인 정의
+use super::{
+    render, Cond, Domain, Edge, Expr, Goto, HasKind, Ignore, Machine, OnUnknown, Source, StateNode,
+};
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Tag {
-    Off,
-    Showing,
+// ─────────────────────────────────────────── domain
+
+crate::tags! {
+    enum Tag {
+        Off,
+        Showing,
+    }
 }
 
-#[derive(Clone, Debug)]
-enum Event {
-    GearChanged(Gear),
-    SpeedChanged,
-    PowerChanged,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Kind {
-    GearChanged,
-    SpeedChanged,
-    PowerChanged,
+crate::events! {
+    #[derive(Clone, Debug)]
+    enum Event => Kind {
+        GearChanged(Gear),
+        SpeedChanged,
+        PowerChanged,
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -42,10 +44,13 @@ enum Action {
 
 #[derive(Default)]
 struct Env {
-    /// `None`이면 조회 실패 — `Cond::Unknown`을 유발한다.
+    /// `None` models a failed lookup, which yields `Cond::Unknown`.
     speed: Option<f32>,
     camera_visible: bool,
     performed: Vec<Action>,
+    /// The event kind each action was performed for, recorded from `perform`'s
+    /// `ev` argument.
+    performed_for: Vec<Kind>,
 }
 
 struct RearCam;
@@ -57,54 +62,39 @@ impl Domain for RearCam {
     type Action = Action;
     type Env = Env;
 
-    fn kind(ev: &Event) -> Kind {
-        match ev {
-            Event::GearChanged(_) => Kind::GearChanged,
-            Event::SpeedChanged => Kind::SpeedChanged,
-            Event::PowerChanged => Kind::PowerChanged,
-        }
-    }
-
-    fn perform(action: Action, _state: &dyn StateNode<Self>, world: &mut Env) {
+    fn perform(action: Action, ev: &Event, _state: &dyn StateNode<Self>, world: &mut Env) {
         world.performed.push(action);
+        world.performed_for.push(ev.kind());
         match action {
             Action::ShowCamera => world.camera_visible = true,
             Action::HideCamera => world.camera_visible = false,
             Action::UpdateOverlay => {}
         }
     }
-
-    fn all_tags() -> &'static [Tag] {
-        &[Tag::Off, Tag::Showing]
-    }
-
-    fn all_kinds() -> &'static [Kind] {
-        &[Kind::GearChanged, Kind::SpeedChanged, Kind::PowerChanged]
-    }
 }
 
-// ─────────────────────────────────────────── 조건 노드
-// payload 노드: 순수. Unknown이 나올 수 없다.
+// ─────────────────────────────────────────── guards
+// A payload guard: pure, and can never be Unknown.
 
 crate::cond_node!(RearCam, GearIsReverse, |cx| match cx.event {
     Event::GearChanged(g) => Cond::from(*g == Gear::Reverse),
     _ => Cond::False,
 });
 
-// context 노드: 조회 실패 시 Unknown.
+// A context guard: Unknown when the lookup fails.
 crate::cond_node!(RearCam, SpeedBelowLimit, |cx| match cx.world.speed {
     Some(v) => Cond::from(v < 15.0),
     None => Cond::Unknown,
 });
 
-// ─────────────────────────────────────────── 상태
+// ─────────────────────────────────────────── states
 
 crate::state!(RearCam, Off, tag: Tag::Off);
 crate::state!(RearCam, Showing, tag: Tag::Showing,
               on_enter: [Action::ShowCamera],
               on_exit:  [Action::HideCamera]);
 
-// ─────────────────────────────────────────── 표
+// ─────────────────────────────────────────── table
 
 static EDGES: &[Edge<RearCam>] = &[
     Edge {
@@ -112,7 +102,7 @@ static EDGES: &[Edge<RearCam>] = &[
         from: Source::These(&[Tag::Off]),
         when: Kind::GearChanged,
         check: crate::check!(GearIsReverse && SpeedBelowLimit),
-        unknown: OnUnknown::Deny, // 속도를 모르면 켜지 않는다
+        unknown: OnUnknown::Deny, // unknown speed: do not turn it on
         run: &[],
         goto: Goto::To(Tag::Showing),
     },
@@ -130,7 +120,7 @@ static EDGES: &[Edge<RearCam>] = &[
         from: Source::These(&[Tag::Showing]),
         when: Kind::SpeedChanged,
         check: crate::check!(!SpeedBelowLimit),
-        unknown: OnUnknown::Allow, // 속도를 모르면 끈다
+        unknown: OnUnknown::Allow, // unknown speed: turn it off
         run: &[],
         goto: Goto::To(Tag::Off),
     },
@@ -141,7 +131,7 @@ static EDGES: &[Edge<RearCam>] = &[
         check: crate::check!(SpeedBelowLimit),
         unknown: OnUnknown::Deny,
         run: &[Action::UpdateOverlay],
-        goto: Goto::Internal, // 상태 불변 — exit/enter 안 돎
+        goto: Goto::Internal, // stays in state, so exit/enter do not run
     },
 ];
 
@@ -149,12 +139,12 @@ static IGNORES: &[Ignore<RearCam>] = &[
     Ignore {
         from: Source::These(&[Tag::Off]),
         when: &[Kind::SpeedChanged],
-        why: "표시 중이 아니면 속도는 무관",
+        why: "speed is irrelevant while the camera is not shown",
     },
     Ignore {
         from: Source::Any,
         when: &[Kind::PowerChanged],
-        why: "전원은 상위 컨트롤러가 처리",
+        why: "power is handled by the parent controller",
     },
 ];
 
@@ -176,10 +166,11 @@ fn showing() -> (Machine<RearCam>, Env) {
     m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w);
     assert_eq!(m.tag(), Tag::Showing);
     w.performed.clear();
+    w.performed_for.clear();
     (m, w)
 }
 
-// ─────────────────────────────────────────── 테스트
+// ─────────────────────────────────────────── tests
 
 #[test]
 fn enters_showing_and_runs_entry_action() {
@@ -216,7 +207,7 @@ fn internal_transition_skips_exit_and_entry() {
 
     assert_eq!(taken.edge, "CAM_OVERLAY");
     assert_eq!(m.tag(), Tag::Showing);
-    // HideCamera / ShowCamera 가 끼지 않는다
+    // Neither HideCamera nor ShowCamera slips in.
     assert_eq!(w.performed, vec![Action::UpdateOverlay]);
 }
 
@@ -224,7 +215,7 @@ fn internal_transition_skips_exit_and_entry() {
 fn unknown_denies_transition_when_policy_is_deny() {
     let mut m = machine();
     let mut w = Env {
-        speed: None, // 조회 실패 → SpeedBelowLimit = Unknown
+        speed: None, // failed lookup -> SpeedBelowLimit = Unknown
         ..Default::default()
     };
 
@@ -237,7 +228,7 @@ fn unknown_denies_transition_when_policy_is_deny() {
 fn unknown_allows_transition_when_policy_is_allow() {
     let (mut m, mut w) = showing();
 
-    w.speed = None; // !SpeedBelowLimit = Unknown, 정책은 Allow
+    w.speed = None; // !SpeedBelowLimit = Unknown, and the policy is Allow
     let taken = m.dispatch(&Event::SpeedChanged, &mut w).unwrap();
 
     assert_eq!(taken.edge, "CAM_OFF_SPEED");
@@ -246,11 +237,12 @@ fn unknown_allows_transition_when_policy_is_allow() {
 
 #[test]
 fn declaration_order_is_priority() {
-    // (Showing, SpeedChanged) 에는 CAM_OFF_SPEED 와 CAM_OVERLAY 가 모두 걸린다.
-    // 조건이 상호배타이므로 실제 충돌은 없지만, 순서가 우선순위임을 고정한다.
+    // Both CAM_OFF_SPEED and CAM_OVERLAY match (Showing, SpeedChanged). Their
+    // guards are mutually exclusive, so there is no real conflict; this pins down
+    // that declaration order decides.
     let (mut m, mut w) = showing();
 
-    w.speed = Some(20.0); // !SpeedBelowLimit = True → 먼저 선언된 CAM_OFF_SPEED
+    w.speed = Some(20.0); // !SpeedBelowLimit = True -> the earlier CAM_OFF_SPEED
     assert_eq!(m.dispatch(&Event::SpeedChanged, &mut w).unwrap().edge, "CAM_OFF_SPEED");
 }
 
@@ -271,7 +263,7 @@ fn coverage_has_no_holes_and_no_unreachable_state() {
     assert!(c.unreachable.is_empty(), "unreachable: {:?}", c.unreachable);
     assert!(c.is_clean());
 
-    // 상호배타 조건이라도 겹침은 리뷰 대상으로 보고된다
+    // Overlaps are reported even when the guards are mutually exclusive.
     assert_eq!(c.overlaps.len(), 1);
     assert_eq!(c.overlaps[0].2, vec!["CAM_OFF_SPEED", "CAM_OVERLAY"]);
 }
@@ -295,25 +287,108 @@ fn internal_table_lists_state_preserving_edges() {
 
     assert!(table.contains("CAM_OVERLAY"), "{table}");
     assert!(table.contains("UpdateOverlay"), "{table}");
-    // 상태를 바꾸는 엣지는 이 표에 없다
+    // Edges that change state are not in this table.
     assert!(!table.contains("CAM_ON"), "{table}");
 }
 
 #[test]
-fn pump_drains_queue_in_order() {
+fn caller_side_queue_processes_events_in_order() {
+    use std::collections::VecDeque;
+
     let mut m = machine();
     let mut w = Env {
         speed: Some(10.0),
         ..Default::default()
     };
 
-    // post 순서대로, 전이 하나가 완전히 끝난 뒤에만 다음 이벤트가 처리된다.
-    m.post(Event::GearChanged(Gear::Reverse));
-    m.post(Event::SpeedChanged);
-    m.pump(&mut w);
+    // Machine owns no queue. Driving it from the caller exposes each Taken.
+    let mut pending = VecDeque::from([Event::GearChanged(Gear::Reverse), Event::SpeedChanged]);
+    let mut taken = Vec::new();
+    while let Some(ev) = pending.pop_front() {
+        if let Some(t) = m.dispatch(&ev, &mut w) {
+            taken.push(t.edge);
+        }
+    }
 
+    assert_eq!(taken, vec!["CAM_ON", "CAM_OVERLAY"]);
     assert_eq!(m.tag(), Tag::Showing);
     assert_eq!(w.performed, vec![Action::ShowCamera, Action::UpdateOverlay]);
+}
+
+#[test]
+fn perform_sees_the_event_on_an_internal_transition() {
+    let (mut m, mut w) = showing();
+
+    // CAM_OVERLAY is Goto::Internal, so neither on_enter nor on_exit runs. Its
+    // action can still read the event, which is the only route to a payload here
+    // because Edge::run holds compile-time constants only.
+    let taken = m.dispatch(&Event::SpeedChanged, &mut w).unwrap();
+
+    assert_eq!(taken.edge, "CAM_OVERLAY");
+    assert_eq!(w.performed, vec![Action::UpdateOverlay]);
+    assert_eq!(w.performed_for, vec![Kind::SpeedChanged]);
+}
+
+#[test]
+fn perform_sees_the_event_for_entry_and_exit_actions() {
+    let (mut m, mut w) = showing();
+
+    // on_exit's actions are performed after the transition, but still for the
+    // event that caused it.
+    m.dispatch(&Event::GearChanged(Gear::Drive), &mut w);
+
+    assert_eq!(w.performed, vec![Action::HideCamera]);
+    assert_eq!(w.performed_for, vec![Kind::GearChanged]);
+}
+
+#[test]
+fn ignore_table_lists_reasons() {
+    let table = render::ignore_table::<RearCam>(IGNORES);
+
+    assert!(table.contains("speed is irrelevant"), "{table}");
+    assert!(table.contains("power is handled"), "{table}");
+    // Source::Any is expanded into concrete states.
+    assert!(table.contains("`Off` | `PowerChanged`"), "{table}");
+    assert!(table.contains("`Showing` | `PowerChanged`"), "{table}");
+}
+
+#[test]
+fn render_parenthesises_negated_subexpressions() {
+    // check! only negates single nodes, but Expr can be built by hand (the
+    // documented route for `||`), and then precedence must survive rendering.
+    static NEGATED_AND: Expr<RearCam> = Expr::Not(&Expr::And(
+        &Expr::Node(&GearIsReverse),
+        &Expr::Node(&SpeedBelowLimit),
+    ));
+
+    assert_eq!(NEGATED_AND.render(), "!(GearIsReverse && SpeedBelowLimit)");
+    // A negated single node needs no parentheses.
+    assert_eq!(crate::check!(!GearIsReverse).render(), "!GearIsReverse");
+}
+
+#[test]
+fn macros_generate_exhaustive_lists() {
+    use crate::Enumerable;
+
+    // The macros supply what all_tags/all_kinds used to spell out by hand.
+    assert_eq!(RearCam::all_tags(), &[Tag::Off, Tag::Showing]);
+    assert_eq!(
+        RearCam::all_kinds(),
+        &[Kind::GearChanged, Kind::SpeedChanged, Kind::PowerChanged]
+    );
+    assert_eq!(Tag::ALL.len(), 2);
+    assert_eq!(Kind::ALL.len(), 3);
+}
+
+#[test]
+fn generated_kind_maps_payload_and_unit_variants() {
+    use crate::HasKind;
+
+    // Payload-carrying and unit variants expand under the same rule.
+    assert_eq!(Event::GearChanged(Gear::Reverse).kind(), Kind::GearChanged);
+    assert_eq!(Event::GearChanged(Gear::Drive).kind(), Kind::GearChanged);
+    assert_eq!(Event::SpeedChanged.kind(), Kind::SpeedChanged);
+    assert_eq!(Event::PowerChanged.kind(), Kind::PowerChanged);
 }
 
 #[test]

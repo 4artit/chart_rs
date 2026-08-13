@@ -1,27 +1,38 @@
-//! 실행기.
+//! The executor.
 
-use std::collections::VecDeque;
+use super::{Cond, Cx, Domain, Edge, Goto, HasKind, Ignore, Memo, OnUnknown, StateNode, render};
 
-use super::{Cond, Cx, Domain, Edge, Goto, Ignore, Memo, OnUnknown, StateNode, render};
-
-/// 전이가 일어났을 때의 결과. 테스트·로그에서 쓴다.
+/// The outcome of a transition, for tests and logs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Taken {
-    /// 채택된 엣지 id.
+    /// The id of the edge that was selected.
     pub edge: &'static str,
-    /// 실행된 액션 이름들 (`on_exit` → `run` → `on_enter` 순).
+    /// Names of the actions that ran, in `on_exit` → `run` → `on_enter` order.
+    ///
+    /// Names rather than values, so that `Taken` stays independent of
+    /// `Domain::Action`.
     pub actions: Vec<String>,
 }
 
+/// The executor. Its only mutable state is the current tag and the state nodes.
+///
+/// There is no event queue. Re-entrancy is prevented by the borrow checker rather
+/// than by queueing (see [`Machine::dispatch`]), and a caller-owned queue can
+/// inspect each transition's [`Taken`].
 pub struct Machine<D: Domain> {
     tag: D::Tag,
     states: Vec<Box<dyn StateNode<D>>>,
     edges: &'static [Edge<D>],
     ignores: &'static [Ignore<D>],
-    queue: VecDeque<D::Event>,
 }
 
 impl<D: Domain> Machine<D> {
+    /// Builds a machine and validates it.
+    ///
+    /// Panics if a state listed by [`Domain::all_tags`] has no state node. In
+    /// debug builds it also panics when [`render::coverage`] reports a defect, so
+    /// table gaps surface at construction rather than at runtime. Release builds
+    /// skip that check; call [`render::coverage`] from a test to keep it enforced.
     pub fn new(
         initial: D::Tag,
         states: Vec<Box<dyn StateNode<D>>>,
@@ -39,9 +50,6 @@ impl<D: Domain> Machine<D> {
             );
         }
 
-        // 표에 구멍·도달불가 상태가 있으면 Machine을 만드는 시점에 바로 패닉한다.
-        // 릴리스 빌드에서는 비용이 사라진다 — coverage()가 커버 대상만큼 순회하므로
-        // 무시하고 싶다면 별도로 render::coverage를 직접 호출해 검사하라.
         #[cfg(debug_assertions)]
         {
             let cov = render::coverage::<D>(initial, edges, ignores);
@@ -53,7 +61,6 @@ impl<D: Domain> Machine<D> {
             states,
             edges,
             ignores,
-            queue: VecDeque::new(),
         }
     }
 
@@ -68,22 +75,38 @@ impl<D: Domain> Machine<D> {
             .unwrap_or_else(|| panic!("no state node for {tag:?}"))
     }
 
-    /// 이벤트 하나를 처리한다. 채택된 엣지가 없으면 `None`.
+    /// Handles one event. Returns `None` when no edge is selected.
     ///
-    /// 초기 상태의 `on_enter`는 실행되지 않는다 — 트리거 이벤트가 없기 때문이다.
-    /// 초기 상태에 진입 액션이 필요하면 `Init` 이벤트를 정의해 dispatch 하라.
+    /// Order of effects: `on_exit(current)` → `run` → tag change →
+    /// `on_enter(target)`. For [`Goto::Internal`] only `run` runs. All effects are
+    /// collected first and carried out afterwards, so [`Domain::perform`] always
+    /// receives the state node of the *target* state.
     ///
-    /// 실행 순서: `on_exit(현재)` → `run` → 상태 전이 → `on_enter(목표)`.
-    /// `Goto::Internal`이면 `run`만 실행된다.
+    /// The initial state's `on_enter` never runs, as no event triggered it. Define
+    /// an `Init` event and dispatch it if the initial state needs entry effects.
+    ///
+    /// # Re-entrancy
+    ///
+    /// [`Domain::perform`] has no way to reach `Machine`, and `self` is mutably
+    /// borrowed for the duration of this call, so a nested dispatch does not
+    /// compile. Drive follow-up events from the caller:
+    ///
+    /// ```ignore
+    /// let mut pending = VecDeque::from([first_event]);
+    /// while let Some(ev) = pending.pop_front() {
+    ///     if let Some(taken) = m.dispatch(&ev, &mut world) {
+    ///         // decide follow-ups from taken.edge / taken.actions
+    ///     }
+    /// }
+    /// ```
     pub fn dispatch(&mut self, ev: &D::Event, world: &mut D::Env) -> Option<Taken> {
-        let kind = D::kind(ev);
+        let kind = ev.kind();
 
         let Some(hit) = self.select(ev, world, kind) else {
             if !self.ignores.iter().any(|i| i.matches(self.tag, kind)) {
                 log::warn!(
-                    "[FSM] unhandled: {:?} x {:?} (no edge, no ignore)",
-                    self.tag,
-                    kind
+                    "[FSM] unhandled: {:?} x {ev:?} (no edge, no ignore)",
+                    self.tag
                 );
             }
             return None;
@@ -112,8 +135,8 @@ impl<D: Domain> Machine<D> {
         }
 
         let names = actions.iter().map(|a| format!("{a:?}")).collect();
-        log::debug!("[FSM] {id}: -> {:?} {names:?}", self.tag);
-        self.perform_all(actions, world);
+        log::debug!("[FSM] {id}: {ev:?} -> {:?} {names:?}", self.tag);
+        self.perform_all(actions, ev, world);
 
         Some(Taken {
             edge: id,
@@ -121,20 +144,8 @@ impl<D: Domain> Machine<D> {
         })
     }
 
-    /// 큐가 빌 때까지 처리한다 (run-to-completion).
-    ///
-    /// 액션이 만든 이벤트는 [`Machine::post`]로 큐에 들어오며, 전이 하나가
-    /// 완전히 끝난 뒤에만 처리된다. 재진입이 구조적으로 불가능하다.
-    pub fn pump(&mut self, world: &mut D::Env) {
-        while let Some(ev) = self.queue.pop_front() {
-            self.dispatch(&ev, world);
-        }
-    }
-
-    pub fn post(&mut self, ev: D::Event) {
-        self.queue.push_back(ev);
-    }
-
+    /// Returns the index of the first matching edge. Declaration order is
+    /// priority.
     fn select(&self, ev: &D::Event, world: &D::Env, kind: D::EventKind) -> Option<usize> {
         let memo = Memo::new();
         let state: &dyn StateNode<D> = &*self.states[self.index_of(self.tag)];
@@ -151,11 +162,11 @@ impl<D: Domain> Machine<D> {
         })
     }
 
-    fn perform_all(&self, actions: Vec<D::Action>, world: &mut D::Env) {
+    fn perform_all(&self, actions: Vec<D::Action>, ev: &D::Event, world: &mut D::Env) {
         let idx = self.index_of(self.tag);
         for a in actions {
             let state: &dyn StateNode<D> = &*self.states[idx];
-            D::perform(a, state, world);
+            D::perform(a, ev, state, world);
         }
     }
 }

@@ -1,11 +1,12 @@
-//! 표의 한 줄.
+//! One row of the transition table.
 
 use super::{Domain, Expr};
 
-/// 출발 상태 지정. **조건이 아니라 상태 목록이다.**
+/// Which states an edge departs from. This is a set of states, not a guard.
 pub enum Source<D: Domain> {
     These(&'static [D::Tag]),
-    /// 나열한 것을 뺀 모든 상태. 계층형 FSM의 DRY 이점만 가져온다.
+    /// Every state except the listed ones. Gives the DRY benefit of hierarchical
+    /// state machines without the hierarchy.
     AnyExcept(&'static [D::Tag]),
     Any,
 }
@@ -19,7 +20,8 @@ impl<D: Domain> Source<D> {
         }
     }
 
-    /// 다이어그램·커버리지용 구체 상태 목록. 와일드카드는 여기서 전개된다.
+    /// The concrete states this matches, for diagrams and coverage. Wildcards are
+    /// expanded here.
     pub fn expand(&self) -> Vec<D::Tag> {
         D::all_tags()
             .iter()
@@ -29,40 +31,43 @@ impl<D: Domain> Source<D> {
     }
 }
 
-/// 목표 상태.
+/// The target of a transition.
 pub enum Goto<D: Domain> {
     To(D::Tag),
-    /// 상태 불변. `on_exit`/`on_enter`가 **돌지 않는다.**
+    /// Stay in the current state. `on_exit` and `on_enter` do **not** run.
     Internal,
 }
 
-/// 조건이 [`super::Cond::Unknown`]일 때의 정책.
+/// What to do when a guard evaluates to [`super::Cond::Unknown`].
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum OnUnknown {
-    /// 모르면 전이하지 않는다 (fail-closed). 현행 미러 컨트롤러의 기본값.
+    /// Do not transition when undecidable (fail-closed).
     Deny,
-    /// 모르면 전이한다.
+    /// Transition when undecidable.
     Allow,
 }
 
-/// 전이 한 줄.
+/// A single transition.
 ///
-/// 같은 `(상태, 이벤트)`에 여러 엣지가 걸리면 **표에 선언한 순서가 우선순위**다.
+/// When several edges match the same `(state, event kind)`, **declaration order
+/// is priority**.
 pub struct Edge<D: Domain> {
-    /// 안정 식별자. 요구사항 추적·골든 diff용. 순서가 바뀌어도 살아남아야 한다.
+    /// Stable identifier, for requirement tracing and golden diffs. It must
+    /// survive reordering of the table.
     pub id: &'static str,
     pub from: Source<D>,
     pub when: D::EventKind,
     pub check: &'static Expr<D>,
     pub unknown: OnUnknown,
-    /// 이 전이에서만 수행하는 액션. 순서 그대로 실행된다.
+    /// Actions run only by this transition, in declaration order.
     pub run: &'static [D::Action],
     pub goto: Goto<D>,
 }
 
-/// 의도적으로 처리하지 않는 조합. **이유를 반드시 적는다.**
+/// A `(state, event kind)` combination that is deliberately not handled.
 ///
-/// 이게 있어야 커버리지 검사에서 "구멍"과 "의도"를 구분할 수 있다.
+/// Declaring these is what lets coverage checking tell a gap apart from an
+/// intentional omission, so `why` is required.
 pub struct Ignore<D: Domain> {
     pub from: Source<D>,
     pub when: &'static [D::EventKind],
