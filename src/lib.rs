@@ -81,7 +81,7 @@ pub trait Domain: Sized + 'static {
     ///
     /// This is the only place `Env` can be mutated; state nodes and guards
     /// receive `&Env`. Every change this controller makes to the world therefore
-    /// passes through an [`Domain::Action`] value that is named in
+    /// passes through an [`Domain::Action`] value that is recorded in
     /// [`Taken::actions`].
     ///
     /// `ev` is the event being dispatched. An action may read values from it that

@@ -185,7 +185,7 @@ fsm::events! {
 
 `perform`은 **`Env`를 변경할 수 있는 유일한 지점이다** — 상태 노드와 조건
 노드는 `&Env`만 받으므로 읽기만 한다. 그래서 이 컨트롤러가 바깥 세상에 하는
-모든 변경은 `Action` 값을 거치고, 실행된 액션은 `Taken::actions`에 이름으로
+모든 변경은 `Action` 값을 거치고, 실행된 액션은 `Taken::actions`에 값 그대로
 남는다. `perform`은 `Machine`에 접근할 수 없어 전이를 유발할 수는 없다.
 
 `ev`는 처리 중인 이벤트다. `Edge::run`은 `&'static`이라 컴파일 타임 상수만

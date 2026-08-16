@@ -183,6 +183,7 @@ fn enters_showing_and_runs_entry_action() {
     let taken = m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w).unwrap();
 
     assert_eq!(taken.edge, "CAM_ON");
+    assert_eq!(taken.actions, vec![Action::ShowCamera]);
     assert_eq!(m.tag(), Tag::Showing);
     assert_eq!(w.performed, vec![Action::ShowCamera]);
     assert!(w.camera_visible);

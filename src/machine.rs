@@ -3,15 +3,39 @@
 use super::{Cond, Cx, Domain, Edge, Goto, HasKind, Ignore, Memo, OnUnknown, StateNode, render};
 
 /// The outcome of a transition, for tests and logs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Taken {
+pub struct Taken<D: Domain> {
     /// The id of the edge that was selected.
     pub edge: &'static str,
-    /// Names of the actions that ran, in `on_exit` → `run` → `on_enter` order.
-    ///
-    /// Names rather than values, so that `Taken` stays independent of
-    /// `Domain::Action`.
-    pub actions: Vec<String>,
+    /// The actions that ran, in `on_exit` → `run` → `on_enter` order.
+    pub actions: Vec<D::Action>,
+}
+
+// Derives would bound `D` itself; these bound only what is actually used.
+impl<D: Domain> std::fmt::Debug for Taken<D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Taken")
+            .field("edge", &self.edge)
+            .field("actions", &self.actions)
+            .finish()
+    }
+}
+
+impl<D: Domain> Clone for Taken<D> {
+    fn clone(&self) -> Self {
+        Self {
+            edge: self.edge,
+            actions: self.actions.clone(),
+        }
+    }
+}
+
+impl<D: Domain> PartialEq for Taken<D>
+where
+    D::Action: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.edge == other.edge && self.actions == other.actions
+    }
 }
 
 /// The executor. Its only mutable state is the current tag and the state nodes.
@@ -99,7 +123,7 @@ impl<D: Domain> Machine<D> {
     ///     }
     /// }
     /// ```
-    pub fn dispatch(&mut self, ev: &D::Event, world: &mut D::Env) -> Option<Taken> {
+    pub fn dispatch(&mut self, ev: &D::Event, world: &mut D::Env) -> Option<Taken<D>> {
         let kind = ev.kind();
 
         let Some(hit) = self.select(ev, world, kind) else {
@@ -134,13 +158,14 @@ impl<D: Domain> Machine<D> {
             self.states[ni].on_enter(ev, world, &mut actions);
         }
 
-        let names = actions.iter().map(|a| format!("{a:?}")).collect();
-        log::debug!("[FSM] {id}: {ev:?} -> {:?} {names:?}", self.tag);
-        self.perform_all(actions, ev, world);
+        // `log::debug!` evaluates its arguments only when the level is enabled,
+        // so this formats nothing in a release build with logging off.
+        log::debug!("[FSM] {id}: {ev:?} -> {:?} {actions:?}", self.tag);
+        self.perform_all(&actions, ev, world);
 
         Some(Taken {
             edge: id,
-            actions: names,
+            actions,
         })
     }
 
@@ -162,9 +187,9 @@ impl<D: Domain> Machine<D> {
         })
     }
 
-    fn perform_all(&self, actions: Vec<D::Action>, ev: &D::Event, world: &mut D::Env) {
+    fn perform_all(&self, actions: &[D::Action], ev: &D::Event, world: &mut D::Env) {
         let idx = self.index_of(self.tag);
-        for a in actions {
+        for &a in actions {
             let state: &dyn StateNode<D> = &*self.states[idx];
             D::perform(a, ev, state, world);
         }
