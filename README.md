@@ -1,20 +1,26 @@
-# fsm
+# chart
 
-선언형 FSM(유한 상태 기계) 프레임워크. 컨트롤러의 전이를 `&'static [Edge<D>]` 표
-하나로 선언하면, 그 표 하나에서 **실행**·**mermaid 다이어그램**·**전수 커버리지
+선언형 컨트롤러 프레임워크. 컨트롤러가 **무엇에 반응하고 무엇을 하는지**를 정적
+데이터로 선언하면, 그 선언 하나에서 **실행**·**mermaid 다이어그램**·**전수 누락
 검사**를 모두 얻는다.
 
-## 왜 표 하나인가
+## 왜 선언인가
 
-전이 로직을 `match` 문 여기저기에 흩어 두면 "이 상태에서 이 이벤트가 오면
-무슨 일이 일어나는가"를 파악하려고 코드를 전부 읽어야 한다. fsm은 그 대신
-전이를 **데이터**(`Edge` 배열)로 선언하게 강제한다. 그러면:
+로직을 `match` 문 여기저기에 흩어 두면 "이 이벤트가 오면 무슨 일이 일어나는가"를
+파악하려고 코드를 전부 읽어야 한다. chart는 그 대신 **데이터로 선언하게 강제**한다.
+그러면 실행기가 그 데이터를 그대로 읽어 동작하므로, 선언과 코드가 어긋날 수가
+없다 — 문서가 낡지 않는 이유다.
 
-- 실행기(`Machine`)가 표를 그대로 읽어서 동작한다.
-- 같은 표에서 mermaid 상태 다이어그램을 자동 생성한다.
-- 같은 표에서 "(상태 × 이벤트) 조합 중 처리되지 않은 게 있는가"를 기계적으로
-  검사한다 — 빠뜨린 케이스는 버그가 아니라 컴파일 타임/테스트 타임에 잡히는
-  구멍(hole)이 된다.
+## 두 개의 층
+
+| 층 | 쓰는 경우 | 선언하는 것 |
+|---|---|---|
+| `feature` | 동작이 과거에 의존하지 않음 | 기능마다 받는 이벤트와 내는 액션 |
+| `machine` | 같은 입력이 상태에 따라 다른 결과를 냄 | 전이 표 (`Edge` 배열) |
+
+둘 다 `Domain`(컨트롤러가 쓸 타입 묶음)을 공유한다. 그래서 어떤 기능이 나중에
+상태를 갖게 되면 선언은 그대로 두고 `StateDomain`만 추가해 `machine`으로 옮기면
+된다. 대부분의 기능은 `feature`로 충분하다.
 
 ## 설치
 
@@ -22,35 +28,36 @@ crates.io에 배포된 패키지는 아니다. 로컬 경로 의존성으로 쓴
 
 ```toml
 [dependencies]
-fsm = { path = "../fsm" }
+chart = { path = "../chart" }
 ```
 
 ## 핵심 개념
 
 | 요소 | 내부 상태 | 역할 |
 |---|---|---|
-| `Domain` | — | 컨트롤러가 쓸 타입 묶음 (Tag / Event / Action / Env) |
-| `CondNode` | 없음 (`&self`) | 전이 조건 판정 |
-| `feature::Feature` | 기능별 | 상태 없는 컨트롤러의 한 기능 — 받는 이벤트와 내는 액션을 선언 |
-| `State` | 없음 (정적) | 한 상태의 태그와 진입/이탈 액션 |
-| `Edge` | 없음 (정적) | 표의 한 줄 |
-| `Machine` | 현재 태그 | 실행기 |
+| `Domain` | — | 컨트롤러가 쓸 타입 묶음 (Event / Action / Env) |
+| `StateDomain` | — | 상태가 있는 컨트롤러가 추가로 구현 (Tag) |
+| `feature::Feature` | 기능별 | 한 기능이 받는 이벤트와 내는 액션 |
+| `machine::CondNode` | 없음 (`&self`) | 전이 조건 판정 |
+| `machine::State` | 없음 (정적) | 한 상태의 태그와 진입/이탈 액션 |
+| `machine::Edge` | 없음 (정적) | 전이 표의 한 줄 |
+| `machine::Machine` | 현재 태그 | 실행기 |
 
 ## 빠른 시작
 
 가장 작은 예제로 훑어본다. 전등을 껐다 켰다 하는 2상태 FSM이다.
 
 ```rust
-use fsm::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
-use fsm::{Domain, StateDomain};
+use chart::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
+use chart::{Domain, StateDomain};
 
 // 1. Domain — 컨트롤러가 쓸 타입들을 한 곳에 묶는다.
 //    tags!/events! 가 enum과 커버리지용 전수 목록을 함께 만든다.
-fsm::tags! {
+chart::tags! {
     enum Tag { Off, On }
 }
 
-fsm::events! {
+chart::events! {
     #[derive(Clone, Debug)]
     enum Event => Kind { Toggle }
 }
@@ -94,7 +101,7 @@ static EDGES: &[Edge<Light>] = &[
         id: "TURN_ON",
         from: Source::These(&[Tag::Off]),
         when: Kind::Toggle,
-        check: fsm::check!(),
+        check: chart::check!(),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::On),
@@ -103,7 +110,7 @@ static EDGES: &[Edge<Light>] = &[
         id: "TURN_OFF",
         from: Source::These(&[Tag::On]),
         when: Kind::Toggle,
-        check: fsm::check!(),
+        check: chart::check!(),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Off),
@@ -165,11 +172,11 @@ pub trait StateDomain: Domain {
 그래서 enum과 목록을 한 선언에서 만드는 매크로를 쓴다.
 
 ```rust
-fsm::tags! {
+chart::tags! {
     enum Tag { Locked, Unlocked, Alarm, Maintenance }
 }
 
-fsm::events! {
+chart::events! {
     #[derive(Clone, Debug)]
     enum Event => Kind {
         EnterCode(u32),   // payload 있는 변형
@@ -239,7 +246,7 @@ static STATES: &[State<Domain타입>] = &[
 `Edge::unknown`에 명시해 다이어그램에도 드러나게 한다.
 
 ```rust
-fsm::cond_node!(Domain타입, CondName, |cx| match cx.event {
+chart::cond_node!(Domain타입, CondName, |cx| match cx.event {
     Event::Something(v) => Cond::from(*v == 기대값),
     _ => Cond::False,
 });
@@ -337,7 +344,7 @@ while let Some(ev) = pending.pop_front() {
 같은 표(`EDGES`, `IGNORES`)에서 세 가지를 뽑는다.
 
 ```rust
-use fsm::render;
+use chart::render;
 
 // mermaid stateDiagram-v2 문자열. Goto::Internal 엣지는 자기 자신으로 가는
 // 화살표가 되어 다이어그램을 어지럽히므로 기본적으로 생략된다.
@@ -373,7 +380,7 @@ mermaid `stateDiagram-v2`와 PlantUML 상태도는 문법이 거의 같다 — `
 scripts/mermaid_to_plantuml.sh example/door_lock.md > example/door_lock.puml
 
 # 이미지로 바로 뽑을 때
-scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > fsm.png
+scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > door_lock.png
 ```
 
 마크다운 파일(```mermaid 펜스 포함)과 생 다이어그램 모두 받고, 인자가 없으면
@@ -389,15 +396,17 @@ scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > fsm.png
 
 ```
 src/
-  lib.rs          // Domain 트레이트 + 모듈 재노출 — 라이브러리 진입점
+  lib.rs          // Domain, StateDomain — 라이브러리 진입점
+  enums.rs        // Enumerable, HasKind, tags!/events! 매크로
+  feature.rs      // Feature, FeatureInfo, dispatch — 상태 없는 층
+  machine.rs      // Machine, Taken — 상태 있는 층
+  machine/
+    cond.rs       // Cond (3치 논리)
+    node.rs       // CondNode, Cx, Expr, Memo, cond_node!/check! 매크로
+    state.rs      // State (태그 + 진입/이탈 액션)
+    edge.rs       // Edge, Source, Goto, OnUnknown, Ignore
+  render.rs       // to_mermaid, coverage, io_table, io_flowchart
   main.rs         // 사용 예제 (도어락 데모, cargo run으로 실행)
-  cond.rs         // Cond (3치 논리)
-  enums.rs        // Enumerable, tags!/events! 매크로
-  node.rs         // CondNode, Cx, Expr, Memo, cond_node!/check! 매크로
-  state.rs        // State (태그 + 진입/이탈 액션)
-  edge.rs         // Edge, Source, Goto, OnUnknown, Ignore
-  machine.rs      // Machine (실행기)
-  render.rs       // to_mermaid, internal_table, coverage
   tests.rs        // 프레임워크 자체 테스트 (후방 카메라 예제)
 example/
   door_lock.md    // cargo run 시 생성되는 mermaid 다이어그램

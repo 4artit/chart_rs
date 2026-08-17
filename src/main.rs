@@ -1,4 +1,4 @@
-//! Example use of the `fsm` crate: a door lock opened by a four-digit code.
+//! Example use of the `chart` crate: a door lock opened by a four-digit code.
 //!
 //! Four states (Locked/Unlocked/Alarm/Maintenance) and seven edges.
 //!
@@ -10,10 +10,10 @@
 //! the diagram: `unlock_code` follows `Unlocked`, and `attempts` is reset on entry
 //! to `Locked` while being incremented by an internal transition.
 
-use fsm::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
-use fsm::{Domain, StateDomain, render};
+use chart::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
+use chart::{Domain, StateDomain, render};
 
-fsm::tags! {
+chart::tags! {
     enum Tag {
         Locked,
         Unlocked,
@@ -24,7 +24,7 @@ fsm::tags! {
 
 // Event, Kind, HasKind and the coverage value list all come from this one
 // declaration.
-fsm::events! {
+chart::events! {
     #[derive(Clone, Debug)]
     enum Event => Kind {
         EnterCode(u32),
@@ -98,12 +98,12 @@ impl StateDomain for Door {
     type Tag = Tag;
 }
 
-fsm::cond_node!(Door, CodeCorrect, |cx| match cx.event {
+chart::cond_node!(Door, CodeCorrect, |cx| match cx.event {
     Event::EnterCode(code) => Cond::from(*code == cx.world.correct_code),
     _ => Cond::False,
 });
 
-fsm::cond_node!(Door, AttemptsExceeded, |cx| Cond::from(
+chart::cond_node!(Door, AttemptsExceeded, |cx| Cond::from(
     cx.world.attempts >= cx.world.max_attempts
 ));
 
@@ -137,7 +137,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "UNLOCK",
         from: Source::These(&[Tag::Locked]),
         when: Kind::EnterCode,
-        check: fsm::check!(CodeCorrect),
+        check: chart::check!(CodeCorrect),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Unlocked),
@@ -146,7 +146,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "WRONG_CODE",
         from: Source::These(&[Tag::Locked]),
         when: Kind::EnterCode,
-        check: fsm::check!(!CodeCorrect && !AttemptsExceeded),
+        check: chart::check!(!CodeCorrect && !AttemptsExceeded),
         unknown: OnUnknown::Deny,
         run: &[Action::Beep, Action::IncrementAttempts],
         goto: Goto::Internal,
@@ -155,7 +155,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "TRIGGER_ALARM",
         from: Source::These(&[Tag::Locked]),
         when: Kind::EnterCode,
-        check: fsm::check!(!CodeCorrect && AttemptsExceeded),
+        check: chart::check!(!CodeCorrect && AttemptsExceeded),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Alarm),
@@ -164,7 +164,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "RELOCK",
         from: Source::These(&[Tag::Unlocked]),
         when: Kind::Timeout,
-        check: fsm::check!(),
+        check: chart::check!(),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Locked),
@@ -173,7 +173,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "ALARM_RESET",
         from: Source::These(&[Tag::Alarm]),
         when: Kind::Reset,
-        check: fsm::check!(),
+        check: chart::check!(),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Locked),
@@ -182,7 +182,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "ENTER_MAINTENANCE",
         from: Source::These(&[Tag::Locked]),
         when: Kind::MaintenanceToggle,
-        check: fsm::check!(),
+        check: chart::check!(),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Maintenance),
@@ -191,7 +191,7 @@ static EDGES: &[Edge<Door>] = &[
         id: "EXIT_MAINTENANCE",
         from: Source::These(&[Tag::Maintenance]),
         when: Kind::MaintenanceToggle,
-        check: fsm::check!(),
+        check: chart::check!(),
         unknown: OnUnknown::Deny,
         run: &[],
         goto: Goto::To(Tag::Locked),

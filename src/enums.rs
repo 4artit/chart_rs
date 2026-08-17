@@ -25,7 +25,7 @@ pub trait Enumerable: Copy + Eq + Debug + 'static {
 /// Implement it by hand to collapse several event variants into one kind:
 ///
 /// ```ignore
-/// impl fsm::HasKind for Event {
+/// impl chart::HasKind for Event {
 ///     type Kind = Kind;
 ///     fn kind(&self) -> Kind {
 ///         match self {
@@ -49,7 +49,7 @@ pub trait HasKind {
 /// Declares a state tag enum together with its [`Enumerable`] impl.
 ///
 /// ```ignore
-/// fsm::tags! {
+/// chart::tags! {
 ///     pub enum Tag {
 ///         Locked,
 ///         Unlocked,
@@ -88,7 +88,7 @@ macro_rules! tags {
 /// Declares an event enum and its kind enum from a single list of variants.
 ///
 /// ```ignore
-/// fsm::events! {
+/// chart::events! {
 ///     #[derive(Clone, Debug)]
 ///     pub enum Event => Kind {
 ///         EnterCode(u32),

@@ -1,12 +1,12 @@
 #!/bin/sh
-# Converts the mermaid `stateDiagram-v2` produced by `fsm::render::to_mermaid`
+# Converts the mermaid `stateDiagram-v2` produced by `chart::render::to_mermaid`
 # into PlantUML.
 #
 # Accepts either a raw diagram or a markdown file containing a ```mermaid fence;
 # reads stdin when no file is given.
 #
 #   scripts/mermaid_to_plantuml.sh example/door_lock.md > example/door_lock.puml
-#   cargo run && scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > fsm.png
+#   cargo run && scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > door_lock.png
 #
 # The two syntaxes line up almost exactly: `[*] --> X` and `A --> B` carry over
 # unchanged, so only the header, the label separator and the line break differ.

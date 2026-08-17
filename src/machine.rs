@@ -100,7 +100,7 @@ impl<D: StateDomain> Machine<D> {
         #[cfg(debug_assertions)]
         {
             let cov = render::coverage::<D>(initial, edges, ignores);
-            assert!(cov.is_clean(), "[FSM] table has holes: {cov:?}");
+            assert!(cov.is_clean(), "[chart] table has holes: {cov:?}");
         }
 
         Self {
@@ -154,7 +154,7 @@ impl<D: StateDomain> Machine<D> {
         let Some(hit) = self.select(ev, world, kind) else {
             if !self.ignores.iter().any(|i| i.matches(self.tag, kind)) {
                 log::warn!(
-                    "[FSM] unhandled: {:?} x {ev:?} (no edge, no ignore)",
+                    "[chart] unhandled: {:?} x {ev:?} (no edge, no ignore)",
                     self.tag
                 );
             }
@@ -183,7 +183,7 @@ impl<D: StateDomain> Machine<D> {
 
         // `log::debug!` evaluates its arguments only when the level is enabled,
         // so this formats nothing in a release build with logging off.
-        log::debug!("[FSM] {id}: {ev:?} -> {:?} {actions:?}", self.tag);
+        log::debug!("[chart] {id}: {ev:?} -> {:?} {actions:?}", self.tag);
 
         Some(Taken { edge: id, actions })
     }
