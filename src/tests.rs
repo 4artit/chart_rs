@@ -601,3 +601,120 @@ static PARTIAL_IGNORES: &[Ignore<PartialCam>] = &[Ignore {
 fn an_edge_targeting_a_tag_outside_the_state_table_is_rejected() {
     let _ = Machine::new(Tag::Off, PARTIAL_STATES, PARTIAL_EDGES, PARTIAL_IGNORES);
 }
+
+// ─────────────────────────────────────────── defective table
+// RearCam is deliberately clean, so the diagnostics never fire on it. This table
+// trips each of them: a hole, an unreachable state, and one guard name shared by
+// three node types.
+
+struct Broken;
+
+impl Domain for Broken {
+    type Tag = Tag;
+    type Event = Event;
+    type EventKind = Kind;
+    type Action = Action;
+    type Env = Env;
+
+    fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
+}
+
+crate::cond_node!(Broken, Duplicate, |_cx| Cond::True);
+
+struct AlsoDuplicate;
+struct StillDuplicate;
+
+impl crate::CondNode<Broken> for AlsoDuplicate {
+    fn name(&self) -> &'static str {
+        "Duplicate"
+    }
+    fn eval(&self, _cx: &Cx<'_, Broken>) -> Cond {
+        Cond::True
+    }
+}
+
+impl crate::CondNode<Broken> for StillDuplicate {
+    fn name(&self) -> &'static str {
+        "Duplicate"
+    }
+    fn eval(&self, _cx: &Cx<'_, Broken>) -> Cond {
+        Cond::True
+    }
+}
+
+/// `Showing` is missing, so `to_mermaid` has no description to draw for it.
+static BROKEN_STATES: &[State<Broken>] = &[State {
+    tag: Tag::Off,
+    entry: &[],
+    exit: &[],
+}];
+
+static BROKEN_EDGES: &[Edge<Broken>] = &[
+    Edge {
+        id: "NO_GUARD",
+        from: Source::These(&[Tag::Off]),
+        when: Kind::GearChanged,
+        check: crate::check!(),
+        unknown: OnUnknown::Deny,
+        run: &[Action::UpdateOverlay],
+        goto: Goto::To(Tag::Off), // nothing reaches Showing
+    },
+    Edge {
+        id: "DUPED_NAMES",
+        from: Source::These(&[Tag::Off]),
+        when: Kind::SpeedChanged,
+        check: &Expr::And(
+            &Expr::Node(&Duplicate),
+            &Expr::And(&Expr::Node(&AlsoDuplicate), &Expr::Node(&StillDuplicate)),
+        ),
+        unknown: OnUnknown::Deny,
+        run: &[],
+        goto: Goto::To(Tag::Off),
+    },
+    Edge {
+        id: "SILENT_INTERNAL",
+        from: Source::These(&[Tag::Off]),
+        when: Kind::PowerChanged,
+        check: crate::check!(),
+        unknown: OnUnknown::Deny,
+        run: &[],
+        goto: Goto::Internal,
+    },
+];
+
+#[test]
+fn coverage_reports_holes_unreachable_states_and_duplicate_names() {
+    let c = render::coverage::<Broken>(Tag::Off, BROKEN_EDGES, &[]);
+
+    assert!(!c.is_clean());
+    // Nothing is declared for Showing at all.
+    assert!(
+        c.holes
+            .contains(&("Showing".to_owned(), "GearChanged".to_owned())),
+        "{:?}",
+        c.holes
+    );
+    assert_eq!(c.unreachable, vec!["Showing"]);
+    // Reported once, however many types share the name.
+    assert_eq!(c.duplicate_node_names, vec!["Duplicate"]);
+}
+
+#[test]
+fn mermaid_labels_a_guardless_edge_and_its_run_actions() {
+    let diagram = render::to_mermaid::<Broken>(Tag::Off, BROKEN_EDGES, BROKEN_STATES);
+
+    assert!(
+        diagram.contains("Off --> Off: GearChanged<br/>/ UpdateOverlay"),
+        "{diagram}"
+    );
+    // Showing has no state table entry, so it gets no description line.
+    assert!(!diagram.contains("Showing :"), "{diagram}");
+}
+
+#[test]
+fn internal_table_dashes_an_empty_guard() {
+    let table = render::internal_table::<Broken>(BROKEN_EDGES);
+
+    assert!(table.contains("`SILENT_INTERNAL`"), "{table}");
+    assert!(table.contains("`—`"), "{table}");
+}
