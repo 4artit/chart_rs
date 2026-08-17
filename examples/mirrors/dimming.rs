@@ -1,7 +1,5 @@
-//! 방현(dimming) — 상태 없음.
-//!
-//! 전원과 기어, 두 현재 값의 순수 함수다. 같은 입력이면 언제나 같은 결과라
-//! 상태 기계로 만들 이유가 없다.
+//! Mirror dimming. A function of the current power state and gear, so it keeps
+//! no state either.
 
 use chart::feature::{Feature, FeatureInfo};
 

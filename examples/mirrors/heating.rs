@@ -1,10 +1,8 @@
-//! 난방 — 상태 없음.
-//!
-//! 디포그 신호를 그대로 따라가므로 기억할 것이 없다. `feature` 층이면 충분하다.
+//! Mirror heating. Follows the defog signal, so it keeps no state.
 
 use chart::feature::{Feature, FeatureInfo};
 
-use crate::{Action, Event, Mirrors, World};
+use crate::{Action, Event, Kind, Mirrors, World};
 
 #[derive(Default)]
 pub struct Heating;
@@ -12,7 +10,7 @@ pub struct Heating;
 impl Feature<Mirrors> for Heating {
     const INFO: FeatureInfo<Mirrors> = FeatureInfo {
         name: "Heating",
-        handles: &[crate::Kind::DefogChanged],
+        handles: &[Kind::DefogChanged],
         emits: &[Action::HeatingOn, Action::HeatingOff],
     };
 

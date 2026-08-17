@@ -1,16 +1,15 @@
-//! 참고용 스케치 — 하나의 컨트롤러 안에서 기능을 파일로 나누고, 상태가 없는 것은
-//! `feature`로, 있는 것은 `machine`으로 관리하는 방식. 커밋 대상이 아니다.
+//! A side mirror controller split by feature, mixing both layers.
 //!
 //!     cargo run --example mirrors
 //!
-//! | 파일 | 층 | 이유 |
+//! | File | Layer | Why |
 //! |---|---|---|
-//! | `heating.rs` | feature | 디포그 신호를 그대로 따라간다. 기억이 없다 |
-//! | `dimming.rs` | feature | 전원과 기어 두 현재 값의 순수 함수다 |
-//! | `fold.rs` | machine | 접는 중/펴는 중이라는 진행 상태가 있다 |
+//! | `heating.rs` | feature | Follows the defog signal |
+//! | `dimming.rs` | feature | A function of power and gear |
+//! | `fold.rs` | machine | Folding and unfolding are observable states |
 //!
-//! 신입이 폴드 티켓을 받으면 `fold.rs`만 읽으면 된다. 라우터(`handle_event`)는
-//! 목차 역할만 하고 판단하지 않는다.
+//! A ticket about folding is answered by `fold.rs` alone. `handle_event` routes
+//! and does not decide.
 
 mod dimming;
 mod fold;
@@ -30,14 +29,14 @@ chart::events! {
         PowerChanged(bool),
         GearChanged(bool),
         SpeedChanged(f32),
-        /// 폴드 모터가 보고하는 실제 위치. 0.0 = 접힘, 1.0 = 펴짐.
+        /// Position reported by the fold motor. 0.0 folded, 1.0 unfolded.
         FoldPositionChanged(f32),
         UserChanged,
     }
 }
 
-/// payload를 싣지 않는다. 표에 이름만 찍히고, `machine` 층의 `&'static [Action]`
-/// 제약에도 그대로 맞는다. 값이 필요하면 `perform`에서 `ev`나 world에서 꺼낸다.
+/// Carries no payload, which is what the `machine` layer's `&'static [Action]`
+/// requires. Runtime values are read from `ev` or the world inside `perform`.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     HeatingOn,
@@ -48,7 +47,7 @@ pub enum Action {
     Unfold,
 }
 
-/// 바깥 세계. 실제로는 `ApiBridge` 자리.
+/// The outside world. Stands in for an API bridge.
 #[derive(Default)]
 pub struct World {
     pub power_on: bool,
@@ -58,7 +57,7 @@ pub struct World {
     pub effects: Vec<String>,
 }
 
-/// 컨트롤러가 쓰는 타입 묶음. 상태 없는 기능들이 이걸 쓴다.
+/// The vocabulary both layers work in.
 pub struct Mirrors;
 
 impl Domain for Mirrors {
@@ -67,7 +66,7 @@ impl Domain for Mirrors {
     type Action = Action;
     type Env = World;
 
-    /// 액션을 수행하는 유일한 지점. 두 층이 공유한다.
+    /// The only place the world is touched. Shared by both layers.
     fn perform(action: Action, _ev: &Event, world: &mut World) {
         let line = match action {
             Action::HeatingOn => "heating on".to_string(),
@@ -81,9 +80,9 @@ impl Domain for Mirrors {
     }
 }
 
-// ─────────────────────────────────────────── 라우터
+// ─────────────────────────────────────────── router
 
-/// 등록 목록은 손으로 유지한다. 라우터 바로 옆에 두어 누락이 눈에 띄게 한다.
+/// Kept by hand, next to the router so that a missing entry is visible.
 const FEATURES: &[FeatureInfo<Mirrors>] = &[Heating::INFO, Dimming::INFO];
 
 #[derive(Default)]
@@ -95,13 +94,13 @@ struct Controller {
 
 impl Controller {
     fn handle_event(&mut self, ev: &Event, world: &mut World) {
-        // 전역 게이트는 여기 한 곳에만. 걸러낸 이유를 남긴다.
+        // The one global gate. It says why it dropped the event.
         if !world.power_on && requires_power(ev.kind()) {
-            println!("  (무시: 전원 꺼짐) {ev:?}");
+            println!("  (dropped: powered off) {ev:?}");
             return;
         }
 
-        // 상태 없는 층: 액션을 모아 라우터가 수행한다.
+        // Stateless layer: actions are collected, then carried out here.
         let mut actions = Vec::new();
         feature::dispatch(&mut self.heating, ev, world, &mut actions);
         feature::dispatch(&mut self.dimming, ev, world, &mut actions);
@@ -109,11 +108,11 @@ impl Controller {
             Mirrors::perform(a, ev, world);
         }
 
-        // 상태 있는 층: 머신이 스스로 수행하고 결과를 돌려준다.
+        // Stateful layer: the machine carries its own out and reports back.
         let taken = self.fold.dispatch(ev, world);
 
         match (actions.is_empty(), taken) {
-            (true, None) => println!("  -> (변화 없음)"),
+            (true, None) => println!("  -> (nothing)"),
             (false, None) => println!("  -> {actions:?}"),
             (true, Some(t)) => println!("  -> [fold:{}] {:?}", t.edge, t.actions),
             (false, Some(t)) => {
@@ -123,65 +122,97 @@ impl Controller {
     }
 }
 
-/// "어떤 이벤트가 전원을 요구하는가"가 흩어지지 않고 한 목록으로 남는다.
+/// Which events need power, as one list rather than a check per handler.
 fn requires_power(kind: Kind) -> bool {
     matches!(kind, Kind::DefogChanged)
 }
 
-// ─────────────────────────────────────────── 실행
+// ─────────────────────────────────────────── run
 
 fn main() {
     let mut c = Controller::default();
     let mut w = World {
-        fold_position: 1.0, // 펴진 상태로 시작
+        fold_position: 1.0, // starts unfolded
         ..Default::default()
     };
 
     let steps: &[(&str, Event)] = &[
-        ("전원 꺼짐 상태에서 디포그", Event::DefogChanged(true)),
-        ("전원 켜짐", Event::PowerChanged(true)),
-        ("디포그 켜짐", Event::DefogChanged(true)),
-        ("후진 기어", Event::GearChanged(true)),
-        ("전원 꺼짐 -> 접기 시작", Event::PowerChanged(false)),
-        ("모터가 절반쯤", Event::FoldPositionChanged(0.5)),
-        ("모터가 다 접힘", Event::FoldPositionChanged(0.0)),
-        ("전원 켜짐 -> 펴기 시작", Event::PowerChanged(true)),
-        ("모터가 다 펴짐", Event::FoldPositionChanged(1.0)),
-        ("사용자 변경(처리자 없음)", Event::UserChanged),
+        ("defog while powered off", Event::DefogChanged(true)),
+        ("power on", Event::PowerChanged(true)),
+        ("defog on", Event::DefogChanged(true)),
+        ("gear to reverse", Event::GearChanged(true)),
+        ("power off, folding starts", Event::PowerChanged(false)),
+        ("motor halfway", Event::FoldPositionChanged(0.5)),
+        ("motor folded", Event::FoldPositionChanged(0.0)),
+        ("power on, unfolding starts", Event::PowerChanged(true)),
+        ("motor unfolded", Event::FoldPositionChanged(1.0)),
+        ("user switched, handled by nobody", Event::UserChanged),
     ];
 
-    println!("── 실행 ──");
+    println!("── run ──");
     for (desc, ev) in steps {
         println!("{desc}");
         apply_signal(ev, &mut w);
         c.handle_event(ev, &mut w);
     }
 
-    println!("\n수행된 효과: {:#?}", w.effects);
+    println!("\neffects: {:#?}", w.effects);
 
-    println!("\n── 기능 입출력 표 ──\n{}", render::io_table(FEATURES));
-    println!(
-        "── 기능 흐름도 ──\n```mermaid\n{}```\n",
-        render::io_flowchart(FEATURES)
-    );
-    println!(
-        "── 폴드 상태 다이어그램 ──\n```mermaid\n{}```",
-        fold::diagram()
-    );
-
-    println!("\n── 진단 ──");
-    // 두 층을 합쳐서 본다. 폴드 머신이 다루는 이벤트는 구멍이 아니다.
-    let by_fold = fold::handled_kinds();
-    println!(
-        "컨트롤러 전체에서 아무도 처리하지 않는 이벤트: {:?}",
-        feature::unhandled_kinds(FEATURES, &[&by_fold])
-    );
-    let cov = fold::coverage();
-    println!("폴드 표의 구멍: {:?}", cov.holes);
-    println!("폴드 표가 깨끗한가: {}", cov.is_clean());
+    let path = "examples/mirrors/mirrors.md";
+    std::fs::write(path, document()).expect("failed to write mirrors.md");
+    println!("\nwrote {path}");
 }
 
-/// 콜백이 실어온 값을 world에 반영한다. 실제로는 상위 서비스가 하는 일.
+/// The whole controller, drawn from its declarations.
+fn document() -> String {
+    // Both layers at once: the machine's events are not holes.
+    let by_fold = fold::handled_kinds();
+    let unhandled = feature::unhandled_kinds(FEATURES, &[&by_fold]);
+    let cov = fold::coverage();
+
+    format!(
+        "\
+# Mirrors controller
+
+What this controller reacts to and what it does about it. Generated from the
+declarations, so it cannot drift from the code — regenerate with
+`cargo run --example mirrors`.
+
+## Features
+
+Stateless features, one per file, each declaring what it handles and emits.
+
+{table}
+## Events, features and actions
+
+```mermaid
+{flow}```
+
+## Folding
+
+Folding and unfolding are observable states, so this one is a state machine.
+
+```mermaid
+{diagram}```
+
+## Checks
+
+| Check | Result |
+|---|---|
+| Events nothing handles | {unhandled:?} |
+| Holes in the fold table | {holes:?} |
+| Fold table is clean | {clean} |
+",
+        table = render::io_table(FEATURES),
+        flow = render::io_flowchart(FEATURES),
+        diagram = fold::diagram(),
+        unhandled = unhandled,
+        holes = cov.holes,
+        clean = cov.is_clean(),
+    )
+}
+
+/// Applies the value a callback carried. A real service would do this.
 fn apply_signal(ev: &Event, w: &mut World) {
     match ev {
         Event::PowerChanged(on) => w.power_on = *on,

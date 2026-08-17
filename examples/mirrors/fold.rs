@@ -1,13 +1,8 @@
-//! 폴드 — 상태 있음.
+//! Mirror folding. `PowerChanged` means different things while folding and
+//! while folded, so this one is a state machine.
 //!
-//! "접는 중"과 "펴는 중"이 관찰 가능한 진행 상태다. 같은 `PowerChanged`가 상태에
-//! 따라 다른 결과를 내므로 `machine` 층을 쓴다.
-//!
-//! # 머신 스펙
-//!
-//! [`MachineSpec`]이 "어느 도메인의, 어떤 상태들인가"만 말한다. 어휘도 guard도
-//! `perform`도 [`crate::Mirrors`]와 그대로 공유하므로, 상태 기계를 하나 더 추가할
-//! 때도 이 두 줄만 더 쓰면 된다.
+//! The spec names [`crate::Mirrors`] as its domain, sharing that controller's
+//! events, actions, guards and `perform`.
 
 use chart::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
 use chart::render::Coverage;
@@ -32,7 +27,7 @@ impl MachineSpec for FoldSm {
 }
 
 // ─────────────────────────────────────────── guards
-// 도메인에 붙으므로 다른 머신이 그대로 재사용할 수 있다.
+// Declared against the domain, so a second machine could reuse them.
 
 chart::cond_node!(Mirrors, PowerOff, |cx| Cond::from(!cx.world.power_on));
 chart::cond_node!(Mirrors, PowerOn, |cx| Cond::from(cx.world.power_on));
@@ -49,9 +44,10 @@ chart::cond_node!(Mirrors, AtUnfolded, |cx| Cond::from(
     cx.world.fold_position >= 0.99
 ));
 
-// ─────────────────────────────────────────── 표
+// ─────────────────────────────────────────── table
 
-/// 모터 명령은 진입 액션이다. 어느 경로로 들어오든 한 번만 나간다.
+/// The motor command is an entry action: it goes out once per arrival, whichever
+/// edge led there.
 static STATES: &[State<FoldSm>] = &[
     State {
         tag: FoldTag::Unfolded,
@@ -123,32 +119,32 @@ static EDGES: &[Edge<FoldSm>] = &[
     },
 ];
 
-/// 다루지 않는 조합은 이유와 함께 선언한다. 이게 있어야 `coverage`가 "빠뜨림"과
-/// "의도"를 구분한다.
+/// Combinations left alone, with the reason `coverage` needs to tell an omission
+/// from a decision.
 static IGNORES: &[Ignore<FoldSm>] = &[
     Ignore {
         from: Source::Any,
         when: &[Kind::DefogChanged, Kind::GearChanged, Kind::UserChanged],
-        why: "난방·방현·사용자 전환은 폴드와 무관하다",
+        why: "heating, dimming and user switching do not affect folding",
     },
     Ignore {
         from: Source::These(&[FoldTag::Folding, FoldTag::Unfolding]),
         when: &[Kind::PowerChanged],
-        why: "이동 중에는 전원 변화로 방향을 뒤집지 않는다",
+        why: "a power change must not reverse a motor that is already moving",
     },
     Ignore {
         from: Source::These(&[FoldTag::Unfolded, FoldTag::Folding, FoldTag::Unfolding]),
         when: &[Kind::SpeedChanged],
-        why: "자동 펴기는 접힌 상태에서만 의미가 있다",
+        why: "the automatic unfold only applies once folded",
     },
     Ignore {
         from: Source::These(&[FoldTag::Unfolded, FoldTag::Folded]),
         when: &[Kind::FoldPositionChanged],
-        why: "정지 상태에서의 위치 보고는 확인할 목표가 없다",
+        why: "position reports while stopped have no target to check against",
     },
 ];
 
-// ─────────────────────────────────────────── 기능
+// ─────────────────────────────────────────── feature
 
 pub struct Fold(Machine<FoldSm>);
 
@@ -168,12 +164,12 @@ impl Fold {
     }
 }
 
-/// 문서 생성기. 표에서만 나오므로 머신 인스턴스가 필요 없다.
+/// Drawn from the tables alone; no machine instance needed.
 pub fn diagram() -> String {
     render::to_mermaid::<FoldSm>(FoldTag::Unfolded, EDGES, STATES)
 }
 
-/// 이 머신이 다루는 이벤트 종류. 컨트롤러 전체 진단에 넘긴다.
+/// The kinds this machine acts on, for the controller-wide check.
 pub fn handled_kinds() -> Vec<Kind> {
     render::handled_kinds::<FoldSm>(EDGES)
 }
