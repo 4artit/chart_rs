@@ -481,7 +481,7 @@ fn ignore_any_except_matches_multiple_tags() {
 
 // ─────────────────────────────────────────── narrowed domain
 // `Domain::all_tags` may be overridden to check a subset, which takes the excluded
-// tags out of `Machine::new`'s validation. An edge may still target one.
+// tags out of the first validation loop. Edge targets are checked separately.
 
 struct PartialCam;
 
@@ -521,12 +521,10 @@ static PARTIAL_IGNORES: &[Ignore<PartialCam>] = &[Ignore {
     why: "outside this fixture",
 }];
 
-/// Construction validates only the tags `all_tags` lists, so a `Goto::To` pointing
-/// outside the state table is not caught until the transition is taken.
+/// A `Goto::To` pointing outside the state table is rejected at construction, not
+/// when the transition is eventually taken.
 #[test]
-#[should_panic(expected = "no state table entry for Showing")]
-fn entering_a_tag_outside_the_state_table_panics() {
-    let mut m = Machine::new(Tag::Off, PARTIAL_STATES, PARTIAL_EDGES, PARTIAL_IGNORES);
-
-    m.dispatch(&Event::GearChanged(Gear::Reverse), &mut Env::default());
+#[should_panic(expected = "edge TO_UNDECLARED goes to Showing")]
+fn an_edge_targeting_a_tag_outside_the_state_table_is_rejected() {
+    let _ = Machine::new(Tag::Off, PARTIAL_STATES, PARTIAL_EDGES, PARTIAL_IGNORES);
 }

@@ -54,7 +54,10 @@ pub struct Machine<D: Domain> {
 impl<D: Domain> Machine<D> {
     /// Builds a machine and validates it.
     ///
-    /// Panics if a state listed by [`Domain::all_tags`] is missing from `states`.
+    /// Panics if a state listed by [`Domain::all_tags`], or targeted by an edge, is
+    /// missing from `states`. The second check matters when [`Domain::all_tags`] is
+    /// narrowed to a subset, which takes the excluded tags out of the first.
+    ///
     /// In debug builds it also panics when [`render::coverage`] reports a defect,
     /// so table gaps surface at construction rather than at runtime. Release builds
     /// skip that check; call [`render::coverage`] from a test to keep it enforced.
@@ -73,6 +76,15 @@ impl<D: Domain> Machine<D> {
                 states.iter().any(|s| s.tag == tag),
                 "tag {tag:?} is listed in Domain::all_tags but not in the state table",
             );
+        }
+        for e in edges {
+            if let Goto::To(next) = e.goto {
+                assert!(
+                    states.iter().any(|s| s.tag == next),
+                    "edge {} goes to {next:?}, which is missing from the state table",
+                    e.id,
+                );
+            }
         }
 
         #[cfg(debug_assertions)]
@@ -93,11 +105,13 @@ impl<D: Domain> Machine<D> {
         self.tag
     }
 
+    /// `new` checks the initial tag and every edge target, which are the only tags
+    /// this is called with, so the miss arm cannot be reached.
     fn state_of(&self, tag: D::Tag) -> &'static State<D> {
         self.states
             .iter()
             .find(|s| s.tag == tag)
-            .unwrap_or_else(|| panic!("no state table entry for {tag:?}"))
+            .unwrap_or_else(|| unreachable!("no state table entry for {tag:?}"))
     }
 
     /// Handles one event. Returns `None` when no edge is selected.
