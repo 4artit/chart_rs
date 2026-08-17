@@ -119,17 +119,21 @@ impl StateNode<Door> for Unlocked {
         Tag::Unlocked
     }
 
-    fn on_enter(&mut self, ev: &Event, _world: &Env, out: &mut Vec<Action>) {
+    fn entry_actions(&self) -> &'static [Action] {
+        &[Action::Unlock]
+    }
+
+    /// Records the code that opened the door. The effect is declared above.
+    fn on_enter(&mut self, ev: &Event, _world: &Env) {
         if let Event::EnterCode(code) = ev {
             self.code_used = *code;
         }
-        out.push(Action::Unlock);
     }
 
     /// Clears the state-scoped variable. State nodes are not dropped on
     /// transition, so without this the previous visit's value would leak into the
     /// next one.
-    fn on_exit(&mut self, _world: &Env, _out: &mut Vec<Action>) {
+    fn on_exit(&mut self, _world: &Env) {
         self.code_used = 0;
     }
 
@@ -275,7 +279,7 @@ fn main() {
         }
     }
 
-    let diagram = render::to_mermaid::<Door>(Tag::Locked, EDGES);
+    let diagram = render::to_mermaid::<Door>(Tag::Locked, EDGES, m.states());
     let md = format!("# Door lock FSM\n\n```mermaid\n{diagram}```\n");
     std::fs::create_dir_all("example").expect("failed to create example dir");
     std::fs::write("example/door_lock.md", &md).expect("failed to write example/door_lock.md");

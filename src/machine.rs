@@ -6,7 +6,7 @@ use super::{Cond, Cx, Domain, Edge, Goto, HasKind, Ignore, Memo, OnUnknown, Stat
 pub struct Taken<D: Domain> {
     /// The id of the edge that was selected.
     pub edge: &'static str,
-    /// The actions that ran, in `on_exit` → `run` → `on_enter` order.
+    /// The actions that ran, in `exit_actions` → `run` → `entry_actions` order.
     pub actions: Vec<D::Action>,
 }
 
@@ -92,6 +92,11 @@ impl<D: Domain> Machine<D> {
         self.tag
     }
 
+    /// The state nodes, for [`render::to_mermaid`].
+    pub fn states(&self) -> &[Box<dyn StateNode<D>>] {
+        &self.states
+    }
+
     fn index_of(&self, tag: D::Tag) -> usize {
         self.states
             .iter()
@@ -101,13 +106,14 @@ impl<D: Domain> Machine<D> {
 
     /// Handles one event. Returns `None` when no edge is selected.
     ///
-    /// Order of effects: `on_exit(current)` → `run` → tag change →
-    /// `on_enter(target)`. For [`Goto::Internal`] only `run` runs. All effects are
-    /// collected first and carried out afterwards, so [`Domain::perform`] always
-    /// receives the state node of the *target* state.
+    /// Order of effects: [`StateNode::exit_actions`] of the current state → `run` →
+    /// tag change → [`StateNode::entry_actions`] of the target. `on_exit` and
+    /// `on_enter` run alongside and produce no actions. For [`Goto::Internal`] only
+    /// `run` runs. All effects are collected first and carried out afterwards, so
+    /// [`Domain::perform`] always receives the state node of the *target* state.
     ///
-    /// The initial state's `on_enter` never runs, as no event triggered it. Define
-    /// an `Init` event and dispatch it if the initial state needs entry effects.
+    /// The initial state's entry effects never run, as no event triggered them.
+    /// Define an `Init` event and dispatch it if the initial state needs them.
     ///
     /// # Re-entrancy
     ///
@@ -147,7 +153,8 @@ impl<D: Domain> Machine<D> {
 
         if target.is_some() {
             let cur = self.index_of(self.tag);
-            self.states[cur].on_exit(world, &mut actions);
+            actions.extend_from_slice(self.states[cur].exit_actions());
+            self.states[cur].on_exit(world);
         }
 
         actions.extend_from_slice(self.edges[hit].run);
@@ -155,7 +162,8 @@ impl<D: Domain> Machine<D> {
         if let Some(next) = target {
             self.tag = next;
             let ni = self.index_of(next);
-            self.states[ni].on_enter(ev, world, &mut actions);
+            actions.extend_from_slice(self.states[ni].entry_actions());
+            self.states[ni].on_enter(ev, world);
         }
 
         // `log::debug!` evaluates its arguments only when the level is enabled,

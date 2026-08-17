@@ -10,18 +10,29 @@ use super::Domain;
 /// transition logic** — transitions belong in the [`super::Edge`] table so that
 /// the table alone describes the machine's structure.
 ///
+/// Effects are declared as static data; the hooks manage variables only.
+///
 /// `Machine` builds every state node up front and keeps it for its own lifetime;
 /// nodes are not created or dropped on transition. Resetting variables in
 /// `on_exit` is therefore what makes them genuinely state-scoped.
 pub trait StateNode<D: Domain>: Any {
     fn tag(&self) -> D::Tag;
 
-    /// Pushes the effects of entering onto `out`. Does not touch the world
-    /// directly.
-    fn on_enter(&mut self, _ev: &D::Event, _world: &D::Env, _out: &mut Vec<D::Action>) {}
+    /// Actions run on entry.
+    fn entry_actions(&self) -> &'static [D::Action] {
+        &[]
+    }
 
-    /// Pushes the effects of leaving onto `out` and resets state-scoped variables.
-    fn on_exit(&mut self, _world: &D::Env, _out: &mut Vec<D::Action>) {}
+    /// Actions run on exit.
+    fn exit_actions(&self) -> &'static [D::Action] {
+        &[]
+    }
+
+    /// Initialises state-scoped variables from the event.
+    fn on_enter(&mut self, _ev: &D::Event, _world: &D::Env) {}
+
+    /// Resets state-scoped variables.
+    fn on_exit(&mut self, _world: &D::Env) {}
 
     /// Downcast hook for [`super::Cx::state_as`]. The [`state!`] macro generates
     /// this.
@@ -37,7 +48,9 @@ pub trait StateNode<D: Domain>: Any {
 ///        on_exit:  [Action::HideCamera]);
 /// ```
 ///
-/// A state that needs variables implements [`StateNode`] directly.
+/// The lists become [`StateNode::entry_actions`] and [`StateNode::exit_actions`];
+/// their elements must be constants. A state that needs variables implements
+/// [`StateNode`] directly.
 #[macro_export]
 macro_rules! state {
     ($dom:ty, $name:ident, tag: $tag:expr) => {
@@ -58,22 +71,11 @@ macro_rules! state {
             fn tag(&self) -> <$dom as $crate::Domain>::Tag {
                 $tag
             }
-            fn on_enter(
-                &mut self,
-                _ev: &<$dom as $crate::Domain>::Event,
-                _world: &<$dom as $crate::Domain>::Env,
-                out: &mut Vec<<$dom as $crate::Domain>::Action>,
-            ) {
-                let _ = &out; // silences the unused warning for empty action lists
-                $(out.push($enter);)*
+            fn entry_actions(&self) -> &'static [<$dom as $crate::Domain>::Action] {
+                &[$($enter),*]
             }
-            fn on_exit(
-                &mut self,
-                _world: &<$dom as $crate::Domain>::Env,
-                out: &mut Vec<<$dom as $crate::Domain>::Action>,
-            ) {
-                let _ = &out;
-                $(out.push($exit);)*
+            fn exit_actions(&self) -> &'static [<$dom as $crate::Domain>::Action] {
+                &[$($exit),*]
             }
             fn as_any(&self) -> &dyn ::std::any::Any {
                 self

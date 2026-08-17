@@ -44,7 +44,7 @@ awk '
           if (s == "" || s == "stateDiagram-v2" || s ~ /^```/) continue
 
           gsub(/<br\/>/, "\\n", s)                # line break inside a label
-          sub(/: /, " : ", s)                     # PlantUML label separator
+          sub(/ *: /, " : ", s)                   # PlantUML label separator
           print s
       }
 

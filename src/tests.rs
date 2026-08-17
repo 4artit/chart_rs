@@ -274,12 +274,17 @@ fn mermaid_matches_golden() {
     let expected = "\
 stateDiagram-v2
     [*] --> Off
+    Showing : entry / ShowCamera<br/>exit / HideCamera
     Off --> Showing: GearChanged<br/>[GearIsReverse && SpeedBelowLimit]
     Showing --> Off: GearChanged<br/>[!GearIsReverse]
     Showing --> Off: SpeedChanged<br/>[!SpeedBelowLimit]<br/>unknown=Allow
 ";
 
-    assert_eq!(render::to_mermaid::<RearCam>(Tag::Off, EDGES), expected);
+    let m = machine();
+    assert_eq!(
+        render::to_mermaid::<RearCam>(Tag::Off, EDGES, m.states()),
+        expected
+    );
 }
 
 #[test]

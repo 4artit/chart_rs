@@ -4,7 +4,7 @@
 use std::any::TypeId;
 use std::fmt::Write as _;
 
-use super::{Domain, Edge, Goto, Ignore, OnUnknown};
+use super::{Domain, Edge, Goto, Ignore, OnUnknown, StateNode};
 
 /// The result of checking every `(state × event kind)` combination.
 #[derive(Debug, Default)]
@@ -105,14 +105,36 @@ pub fn coverage<D: Domain>(
 /// [`Goto::Internal`] edges are omitted: drawing state-preserving transitions as
 /// self-loops makes the diagram unreadable. Use [`internal_table`] for those.
 ///
-/// Entry and exit actions do not appear here. They are pushed by code at runtime
-/// rather than declared as static data, so they cannot be read from the table.
+/// Entry and exit actions are read from [`StateNode::entry_actions`] and
+/// [`StateNode::exit_actions`] and drawn as state descriptions. Pass
+/// [`super::Machine::states`] for `states`.
 ///
 /// The output converts to PlantUML almost line for line; see
 /// `scripts/mermaid_to_plantuml.sh`.
-pub fn to_mermaid<D: Domain>(initial: D::Tag, edges: &'static [Edge<D>]) -> String {
+pub fn to_mermaid<D: Domain>(
+    initial: D::Tag,
+    edges: &'static [Edge<D>],
+    states: &[Box<dyn StateNode<D>>],
+) -> String {
     let mut s = String::from("stateDiagram-v2\n");
     let _ = writeln!(s, "    [*] --> {initial:?}");
+
+    // Declaration order, not the order the nodes were passed in.
+    for &tag in D::all_tags() {
+        let Some(node) = states.iter().find(|n| n.tag() == tag) else {
+            continue;
+        };
+        let mut lines: Vec<String> = Vec::new();
+        if !node.entry_actions().is_empty() {
+            lines.push(format!("entry / {}", join_actions(node.entry_actions())));
+        }
+        if !node.exit_actions().is_empty() {
+            lines.push(format!("exit / {}", join_actions(node.exit_actions())));
+        }
+        if !lines.is_empty() {
+            let _ = writeln!(s, "    {tag:?} : {}", lines.join("<br/>"));
+        }
+    }
 
     for e in edges {
         let Goto::To(next) = e.goto else { continue };
