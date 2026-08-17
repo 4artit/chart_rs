@@ -194,6 +194,32 @@ fn enters_showing_and_runs_entry_action() {
     assert!(w.camera_visible);
 }
 
+/// `Taken`'s impls are hand-written so that they bound `D::Action` rather than
+/// `D`, which a derive would have required.
+#[test]
+fn taken_is_debug_clone_and_eq() {
+    let mut m = machine();
+    let mut w = Env {
+        speed: Some(10.0),
+        ..Default::default()
+    };
+
+    let on = m
+        .dispatch(&Event::GearChanged(Gear::Reverse), &mut w)
+        .unwrap();
+
+    assert_eq!(
+        format!("{on:?}"),
+        r#"Taken { edge: "CAM_ON", actions: [ShowCamera] }"#
+    );
+    assert_eq!(on.clone(), on);
+
+    let off = m
+        .dispatch(&Event::GearChanged(Gear::Drive), &mut w)
+        .unwrap();
+    assert_ne!(off, on);
+}
+
 #[test]
 fn exit_action_runs_on_leaving() {
     let (mut m, mut w) = showing();
@@ -451,4 +477,56 @@ fn ignore_any_except_matches_multiple_tags() {
     assert!(ignore.matches(Tag::Off, Kind::PowerChanged));
     assert!(!ignore.matches(Tag::Showing, Kind::PowerChanged));
     assert!(!ignore.matches(Tag::Off, Kind::GearChanged));
+}
+
+// ─────────────────────────────────────────── narrowed domain
+// `Domain::all_tags` may be overridden to check a subset, which takes the excluded
+// tags out of `Machine::new`'s validation. An edge may still target one.
+
+struct PartialCam;
+
+impl Domain for PartialCam {
+    type Tag = Tag;
+    type Event = Event;
+    type EventKind = Kind;
+    type Action = Action;
+    type Env = Env;
+
+    fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
+
+    fn all_tags() -> &'static [Tag] {
+        &[Tag::Off]
+    }
+}
+
+static PARTIAL_STATES: &[State<PartialCam>] = &[State {
+    tag: Tag::Off,
+    entry: &[],
+    exit: &[],
+}];
+
+static PARTIAL_EDGES: &[Edge<PartialCam>] = &[Edge {
+    id: "TO_UNDECLARED",
+    from: Source::These(&[Tag::Off]),
+    when: Kind::GearChanged,
+    check: crate::check!(),
+    unknown: OnUnknown::Deny,
+    run: &[],
+    goto: Goto::To(Tag::Showing), // absent from all_tags and from PARTIAL_STATES
+}];
+
+static PARTIAL_IGNORES: &[Ignore<PartialCam>] = &[Ignore {
+    from: Source::Any,
+    when: &[Kind::SpeedChanged, Kind::PowerChanged],
+    why: "outside this fixture",
+}];
+
+/// Construction validates only the tags `all_tags` lists, so a `Goto::To` pointing
+/// outside the state table is not caught until the transition is taken.
+#[test]
+#[should_panic(expected = "no state table entry for Showing")]
+fn entering_a_tag_outside_the_state_table_panics() {
+    let mut m = Machine::new(Tag::Off, PARTIAL_STATES, PARTIAL_EDGES, PARTIAL_IGNORES);
+
+    m.dispatch(&Event::GearChanged(Gear::Reverse), &mut Env::default());
 }
