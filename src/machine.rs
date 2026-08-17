@@ -106,11 +106,11 @@ impl<D: Domain> Machine<D> {
 
     /// Handles one event. Returns `None` when no edge is selected.
     ///
-    /// Order of effects: [`StateNode::exit_actions`] of the current state → `run` →
-    /// tag change → [`StateNode::entry_actions`] of the target. `on_exit` and
-    /// `on_enter` run alongside and produce no actions. For [`Goto::Internal`] only
-    /// `run` runs. All effects are collected first and carried out afterwards, so
-    /// [`Domain::perform`] always receives the state node of the *target* state.
+    /// Order of effects: [`StateNode::exit_actions`] → `on_exit` → tag change →
+    /// `run` → `on_enter` → [`StateNode::entry_actions`]. For [`Goto::Internal`]
+    /// only `run` runs. Each action is carried out while the machine is in the
+    /// state that owns it, so [`Domain::perform`] receives the state being left for
+    /// an exit action and the target state for the rest.
     ///
     /// The initial state's entry effects never run, as no event triggered them.
     /// Define an `Init` event and dispatch it if the initial state needs them.
@@ -151,30 +151,26 @@ impl<D: Domain> Machine<D> {
             Goto::Internal => None,
         };
 
-        if target.is_some() {
+        if let Some(next) = target {
             let cur = self.index_of(self.tag);
-            actions.extend_from_slice(self.states[cur].exit_actions());
+            self.perform_all(self.states[cur].exit_actions(), ev, world, &mut actions);
             self.states[cur].on_exit(world);
+            self.tag = next;
         }
 
-        actions.extend_from_slice(self.edges[hit].run);
+        self.perform_all(self.edges[hit].run, ev, world, &mut actions);
 
         if let Some(next) = target {
-            self.tag = next;
             let ni = self.index_of(next);
-            actions.extend_from_slice(self.states[ni].entry_actions());
             self.states[ni].on_enter(ev, world);
+            self.perform_all(self.states[ni].entry_actions(), ev, world, &mut actions);
         }
 
         // `log::debug!` evaluates its arguments only when the level is enabled,
         // so this formats nothing in a release build with logging off.
         log::debug!("[FSM] {id}: {ev:?} -> {:?} {actions:?}", self.tag);
-        self.perform_all(&actions, ev, world);
 
-        Some(Taken {
-            edge: id,
-            actions,
-        })
+        Some(Taken { edge: id, actions })
     }
 
     /// Returns the index of the first matching edge. Declaration order is
@@ -195,11 +191,21 @@ impl<D: Domain> Machine<D> {
         })
     }
 
-    fn perform_all(&self, actions: &[D::Action], ev: &D::Event, world: &mut D::Env) {
+    /// Carries out `to_run` against the state the machine is in *now*, appending
+    /// each action to `done` as it goes.
+    fn perform_all(
+        &self,
+        to_run: &[D::Action],
+        ev: &D::Event,
+        world: &mut D::Env,
+        done: &mut Vec<D::Action>,
+    ) {
         let idx = self.index_of(self.tag);
-        for &a in actions {
-            let state: &dyn StateNode<D> = &*self.states[idx];
+        let state: &dyn StateNode<D> = &*self.states[idx];
+
+        for &a in to_run {
             D::perform(a, ev, state, world);
+            done.push(a);
         }
     }
 }

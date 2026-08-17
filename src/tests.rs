@@ -51,6 +51,9 @@ struct Env {
     /// The event kind each action was performed for, recorded from `perform`'s
     /// `ev` argument.
     performed_for: Vec<Kind>,
+    /// The state each action was performed in, recorded from `perform`'s `state`
+    /// argument.
+    performed_in: Vec<Tag>,
 }
 
 struct RearCam;
@@ -62,9 +65,10 @@ impl Domain for RearCam {
     type Action = Action;
     type Env = Env;
 
-    fn perform(action: Action, ev: &Event, _state: &dyn StateNode<Self>, world: &mut Env) {
+    fn perform(action: Action, ev: &Event, state: &dyn StateNode<Self>, world: &mut Env) {
         world.performed.push(action);
         world.performed_for.push(ev.kind());
+        world.performed_in.push(state.tag());
         match action {
             Action::ShowCamera => world.camera_visible = true,
             Action::HideCamera => world.camera_visible = false,
@@ -198,6 +202,27 @@ fn exit_action_runs_on_leaving() {
     assert_eq!(m.tag(), Tag::Off);
     assert_eq!(w.performed, vec![Action::HideCamera]);
     assert!(!w.camera_visible);
+}
+
+#[test]
+fn perform_sees_the_state_that_owns_the_action() {
+    let mut m = machine();
+    let mut w = Env {
+        speed: Some(10.0),
+        ..Default::default()
+    };
+
+    // Entry action of Showing: performed after the tag moved to Showing.
+    m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w);
+    assert_eq!(w.performed, vec![Action::ShowCamera]);
+    assert_eq!(w.performed_in, vec![Tag::Showing]);
+
+    // Exit action of Showing: performed while the machine is still in Showing,
+    // even though the transition ends in Off.
+    m.dispatch(&Event::GearChanged(Gear::Drive), &mut w);
+    assert_eq!(m.tag(), Tag::Off);
+    assert_eq!(w.performed, vec![Action::ShowCamera, Action::HideCamera]);
+    assert_eq!(w.performed_in, vec![Tag::Showing, Tag::Showing]);
 }
 
 #[test]

@@ -67,9 +67,8 @@ impl Domain for Door {
     type Action = Action;
     type Env = Env;
 
-    /// `state` is the state node *after* the transition, so an action may only
-    /// read a state-scoped variable on transitions that stay in or enter the state
-    /// that owns it.
+    /// `state` is the node of the state that owns the action: the one being left
+    /// for an exit action, the target state otherwise.
     fn perform(action: Action, _ev: &Event, state: &dyn StateNode<Self>, world: &mut Env) {
         match action {
             Action::Unlock => match state.as_any().downcast_ref::<Unlocked>() {
