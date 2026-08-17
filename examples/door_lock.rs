@@ -1,5 +1,7 @@
 //! Example use of the `chart` crate: a door lock opened by a four-digit code.
 //!
+//!     cargo run --example door_lock
+//!
 //! Four states (Locked/Unlocked/Alarm/Maintenance) and seven edges.
 //!
 //! # Where a state-dependent value belongs

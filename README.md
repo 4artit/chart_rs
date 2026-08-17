@@ -130,7 +130,8 @@ fn main() {
 ```
 
 더 복잡한 예제(상태 4개, 엣지 7개, 조건 조합, `Ignore`의 와일드카드 사용)는
-[`src/main.rs`](src/main.rs)의 도어락 데모를 참고. `cargo run`으로 실행하면
+[`examples/door_lock.rs`](examples/door_lock.rs)의 도어락 데모를 참고.
+`cargo run --example door_lock`으로 실행하면
 [`example/door_lock.md`](example/door_lock.md)에 mermaid 다이어그램이 생성된다.
 
 ## 상세 사용법
@@ -409,10 +410,11 @@ src/
     state.rs      // State (태그 + 진입/이탈 액션)
     edge.rs       // Edge, Source, Goto, OnUnknown, Ignore
   render.rs       // to_mermaid, coverage, io_table, io_flowchart
-  main.rs         // 사용 예제 (도어락 데모, cargo run으로 실행)
   tests.rs        // 프레임워크 자체 테스트 (후방 카메라 예제)
+examples/
+  door_lock.rs    // 사용 예제 — cargo run --example door_lock
 example/
-  door_lock.md    // cargo run 시 생성되는 mermaid 다이어그램
+  door_lock.md    // 예제 실행 시 생성되는 mermaid 다이어그램
 ```
 
 ## 테스트
