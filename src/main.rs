@@ -2,21 +2,15 @@
 //!
 //! Four states (Locked/Unlocked/Alarm/Maintenance) and seven edges.
 //!
-//! # Where a variable belongs
+//! # Where a state-dependent value belongs
 //!
-//! | Value | Owner | Why |
-//! |---|---|---|
-//! | [`Unlocked::code_used`] | state node | Meaningless outside the state, written only on entry |
-//! | `Env::attempts` | `Env` | Scoped to `Locked` in spirit, but updated by an action |
-//!
-//! A state node can only be written from `on_enter`/`on_exit`, and those do not
-//! run for [`Goto::Internal`] transitions. `attempts` is incremented by
-//! `Action::IncrementAttempts` on an internal transition, so it lives in `Env` and
-//! is cleared by `Action::ResetAttempts` on entry to `Locked`.
+//! Everything mutable lives in `Env`, and every write to it is an `Action`. A
+//! value that only matters inside one state is set by that state's `entry` action
+//! and cleared by its `exit` one, so its whole lifecycle is in the tables and on
+//! the diagram: `unlock_code` follows `Unlocked`, and `attempts` is reset on entry
+//! to `Locked` while being incremented by an internal transition.
 
-use std::any::Any;
-
-use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, StateNode, render};
+use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, State, render};
 
 fsm::tags! {
     enum Tag {
@@ -42,6 +36,7 @@ fsm::events! {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Action {
     Unlock,
+    ClearUnlockCode,
     Lock,
     Beep,
     IncrementAttempts,
@@ -56,6 +51,9 @@ struct Env {
     correct_code: u32,
     attempts: u32,
     max_attempts: u32,
+    /// Set by `Unlocked`'s entry action and cleared by its exit one, so it is only
+    /// meaningful while the door is unlocked.
+    unlock_code: u32,
 }
 
 struct Door;
@@ -67,14 +65,15 @@ impl Domain for Door {
     type Action = Action;
     type Env = Env;
 
-    /// `state` is the node of the state that owns the action: the one being left
-    /// for an exit action, the target state otherwise.
-    fn perform(action: Action, _ev: &Event, state: &dyn StateNode<Self>, world: &mut Env) {
+    fn perform(action: Action, ev: &Event, world: &mut Env) {
         match action {
-            Action::Unlock => match state.as_any().downcast_ref::<Unlocked>() {
-                Some(u) => println!("  [action] unlock (code {})", u.code_used),
-                None => println!("  [action] unlock"),
-            },
+            Action::Unlock => {
+                if let Event::EnterCode(code) = ev {
+                    world.unlock_code = *code;
+                }
+                println!("  [action] unlock (code {})", world.unlock_code);
+            }
+            Action::ClearUnlockCode => world.unlock_code = 0,
             Action::Lock => println!("  [action] lock"),
             Action::Beep => println!("  [action] beep (wrong code)"),
             Action::IncrementAttempts => {
@@ -104,49 +103,30 @@ fsm::cond_node!(Door, AttemptsExceeded, |cx| Cond::from(
     cx.world.attempts >= cx.world.max_attempts
 ));
 
-/// A state that captures the event payload it was entered with.
-///
-/// `on_enter` takes `&mut self`, so a plain `u32` suffices. No other state can
-/// reach this variable: [`fsm::Cx`] exposes only the current state's node.
-#[derive(Default)]
-pub struct Unlocked {
-    code_used: u32,
-}
-
-impl StateNode<Door> for Unlocked {
-    fn tag(&self) -> Tag {
-        Tag::Unlocked
-    }
-
-    fn entry_actions(&self) -> &'static [Action] {
-        &[Action::Unlock]
-    }
-
-    /// Records the code that opened the door. The effect is declared above.
-    fn on_enter(&mut self, ev: &Event, _world: &Env) {
-        if let Event::EnterCode(code) = ev {
-            self.code_used = *code;
-        }
-    }
-
-    /// Clears the state-scoped variable. State nodes are not dropped on
-    /// transition, so without this the previous visit's value would leak into the
-    /// next one.
-    fn on_exit(&mut self, _world: &Env) {
-        self.code_used = 0;
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-// States without variables need only the macro.
-fsm::state!(Door, Locked, tag: Tag::Locked,
-            entry: [Action::Lock, Action::ResetAttempts]);
-fsm::state!(Door, Alarm, tag: Tag::Alarm, entry: [Action::SoundAlarm]);
-fsm::state!(Door, Maintenance, tag: Tag::Maintenance,
-            entry: [Action::MaintenanceOn], exit: [Action::MaintenanceOff]);
+// `Unlocked` captures the code it was entered with: `Unlock` reads the payload
+// out of `ev`, and `ClearUnlockCode` drops it again on the way out.
+static STATES: &[State<Door>] = &[
+    State {
+        tag: Tag::Locked,
+        entry: &[Action::Lock, Action::ResetAttempts],
+        exit: &[],
+    },
+    State {
+        tag: Tag::Unlocked,
+        entry: &[Action::Unlock],
+        exit: &[Action::ClearUnlockCode],
+    },
+    State {
+        tag: Tag::Alarm,
+        entry: &[Action::SoundAlarm],
+        exit: &[],
+    },
+    State {
+        tag: Tag::Maintenance,
+        entry: &[Action::MaintenanceOn],
+        exit: &[Action::MaintenanceOff],
+    },
+];
 
 static EDGES: &[Edge<Door>] = &[
     Edge {
@@ -242,18 +222,9 @@ fn main() {
         correct_code: 1234,
         attempts: 0,
         max_attempts: 2,
+        unlock_code: 0,
     };
-    let mut m = Machine::new(
-        Tag::Locked,
-        vec![
-            Box::new(Locked),
-            Box::new(Unlocked::default()),
-            Box::new(Alarm),
-            Box::new(Maintenance),
-        ],
-        EDGES,
-        IGNORES,
-    );
+    let mut m = Machine::new(Tag::Locked, STATES, EDGES, IGNORES);
 
     let steps: &[(&str, Event)] = &[
         ("wrong code, 1st", Event::EnterCode(9999)),
@@ -278,7 +249,7 @@ fn main() {
         }
     }
 
-    let diagram = render::to_mermaid::<Door>(Tag::Locked, EDGES, m.states());
+    let diagram = render::to_mermaid::<Door>(Tag::Locked, EDGES, STATES);
     let md = format!("# Door lock FSM\n\n```mermaid\n{diagram}```\n");
     std::fs::create_dir_all("example").expect("failed to create example dir");
     std::fs::write("example/door_lock.md", &md).expect("failed to write example/door_lock.md");

@@ -1,6 +1,6 @@
 //! The executor.
 
-use super::{Cond, Cx, Domain, Edge, Goto, HasKind, Ignore, Memo, OnUnknown, StateNode, render};
+use super::{Cond, Cx, Domain, Edge, Goto, HasKind, Ignore, Memo, OnUnknown, State, render};
 
 /// The outcome of a transition, for tests and logs.
 pub struct Taken<D: Domain> {
@@ -38,14 +38,15 @@ where
     }
 }
 
-/// The executor. Its only mutable state is the current tag and the state nodes.
+/// The executor. Its only mutable state is the current tag; everything else is
+/// the static tables it was built from.
 ///
 /// There is no event queue. Re-entrancy is prevented by the borrow checker rather
 /// than by queueing (see [`Machine::dispatch`]), and a caller-owned queue can
 /// inspect each transition's [`Taken`].
 pub struct Machine<D: Domain> {
     tag: D::Tag,
-    states: Vec<Box<dyn StateNode<D>>>,
+    states: &'static [State<D>],
     edges: &'static [Edge<D>],
     ignores: &'static [Ignore<D>],
 }
@@ -53,24 +54,24 @@ pub struct Machine<D: Domain> {
 impl<D: Domain> Machine<D> {
     /// Builds a machine and validates it.
     ///
-    /// Panics if a state listed by [`Domain::all_tags`] has no state node. In
-    /// debug builds it also panics when [`render::coverage`] reports a defect, so
-    /// table gaps surface at construction rather than at runtime. Release builds
+    /// Panics if a state listed by [`Domain::all_tags`] is missing from `states`.
+    /// In debug builds it also panics when [`render::coverage`] reports a defect,
+    /// so table gaps surface at construction rather than at runtime. Release builds
     /// skip that check; call [`render::coverage`] from a test to keep it enforced.
     pub fn new(
         initial: D::Tag,
-        states: Vec<Box<dyn StateNode<D>>>,
+        states: &'static [State<D>],
         edges: &'static [Edge<D>],
         ignores: &'static [Ignore<D>],
     ) -> Self {
         assert!(
-            states.iter().any(|s| s.tag() == initial),
-            "initial tag {initial:?} has no state node",
+            states.iter().any(|s| s.tag == initial),
+            "initial tag {initial:?} is missing from the state table",
         );
         for &tag in D::all_tags() {
             assert!(
-                states.iter().any(|s| s.tag() == tag),
-                "tag {tag:?} is listed in Domain::all_tags but has no state node",
+                states.iter().any(|s| s.tag == tag),
+                "tag {tag:?} is listed in Domain::all_tags but not in the state table",
             );
         }
 
@@ -92,25 +93,19 @@ impl<D: Domain> Machine<D> {
         self.tag
     }
 
-    /// The state nodes, for [`render::to_mermaid`].
-    pub fn states(&self) -> &[Box<dyn StateNode<D>>] {
-        &self.states
-    }
-
-    fn index_of(&self, tag: D::Tag) -> usize {
+    fn state_of(&self, tag: D::Tag) -> &'static State<D> {
         self.states
             .iter()
-            .position(|s| s.tag() == tag)
-            .unwrap_or_else(|| panic!("no state node for {tag:?}"))
+            .find(|s| s.tag == tag)
+            .unwrap_or_else(|| panic!("no state table entry for {tag:?}"))
     }
 
     /// Handles one event. Returns `None` when no edge is selected.
     ///
-    /// Order of effects: [`StateNode::exit_actions`] → `on_exit` → tag change →
-    /// `run` → `on_enter` → [`StateNode::entry_actions`]. For [`Goto::Internal`]
-    /// only `run` runs. Each action is carried out while the machine is in the
-    /// state that owns it, so [`Domain::perform`] receives the state being left for
-    /// an exit action and the target state for the rest.
+    /// Order of effects: [`State::exit`] of the current state → tag change → `run`
+    /// → [`State::entry`] of the target. For [`Goto::Internal`] only `run` runs.
+    /// Each action is carried out as it is reached, so an exit action sees the
+    /// world before the transition's later effects.
     ///
     /// The initial state's entry effects never run, as no event triggered them.
     /// Define an `Init` event and dispatch it if the initial state needs them.
@@ -152,18 +147,14 @@ impl<D: Domain> Machine<D> {
         };
 
         if let Some(next) = target {
-            let cur = self.index_of(self.tag);
-            self.perform_all(self.states[cur].exit_actions(), ev, world, &mut actions);
-            self.states[cur].on_exit(world);
+            Self::perform_all(self.state_of(self.tag).exit, ev, world, &mut actions);
             self.tag = next;
         }
 
-        self.perform_all(self.edges[hit].run, ev, world, &mut actions);
+        Self::perform_all(self.edges[hit].run, ev, world, &mut actions);
 
         if let Some(next) = target {
-            let ni = self.index_of(next);
-            self.states[ni].on_enter(ev, world);
-            self.perform_all(self.states[ni].entry_actions(), ev, world, &mut actions);
+            Self::perform_all(self.state_of(next).entry, ev, world, &mut actions);
         }
 
         // `log::debug!` evaluates its arguments only when the level is enabled,
@@ -177,8 +168,7 @@ impl<D: Domain> Machine<D> {
     /// priority.
     fn select(&self, ev: &D::Event, world: &D::Env, kind: D::EventKind) -> Option<usize> {
         let memo = Memo::new();
-        let state: &dyn StateNode<D> = &*self.states[self.index_of(self.tag)];
-        let cx = Cx::new(ev, world, state, &memo);
+        let cx = Cx::new(ev, world, &memo);
 
         self.edges.iter().position(|e| {
             e.when == kind
@@ -191,20 +181,15 @@ impl<D: Domain> Machine<D> {
         })
     }
 
-    /// Carries out `to_run` against the state the machine is in *now*, appending
-    /// each action to `done` as it goes.
+    /// Carries out `to_run`, appending each action to `done` as it goes.
     fn perform_all(
-        &self,
         to_run: &[D::Action],
         ev: &D::Event,
         world: &mut D::Env,
         done: &mut Vec<D::Action>,
     ) {
-        let idx = self.index_of(self.tag);
-        let state: &dyn StateNode<D> = &*self.states[idx];
-
         for &a in to_run {
-            D::perform(a, ev, state, world);
+            D::perform(a, ev, world);
             done.push(a);
         }
     }

@@ -3,7 +3,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 
-use super::{Cond, Domain, StateNode};
+use super::{Cond, Domain};
 
 /// One transition guard.
 ///
@@ -27,34 +27,12 @@ pub struct Cx<'a, D: Domain> {
     pub event: &'a D::Event,
     /// The outside world, read-only.
     pub world: &'a D::Env,
-    /// The current state node. Read its variables rather than branching on its
-    /// tag — the edge's `from` has already fixed the state.
-    pub state: &'a dyn StateNode<D>,
     memo: &'a Memo,
 }
 
 impl<'a, D: Domain> Cx<'a, D> {
-    pub fn new(
-        event: &'a D::Event,
-        world: &'a D::Env,
-        state: &'a dyn StateNode<D>,
-        memo: &'a Memo,
-    ) -> Self {
-        Self {
-            event,
-            world,
-            state,
-            memo,
-        }
-    }
-
-    /// Views the current state node as a concrete type, or `None` if the machine
-    /// is in a different state.
-    ///
-    /// Only the current state's node is reachable; other states' nodes are not
-    /// exposed anywhere.
-    pub fn state_as<S: StateNode<D>>(&self) -> Option<&S> {
-        self.state.as_any().downcast_ref::<S>()
+    pub fn new(event: &'a D::Event, world: &'a D::Env, memo: &'a Memo) -> Self {
+        Self { event, world, memo }
     }
 }
 

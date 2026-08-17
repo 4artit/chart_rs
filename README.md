@@ -31,16 +31,16 @@ fsm = { path = "../fsm" }
 |---|---|---|
 | `Domain` | — | 컨트롤러가 쓸 타입 묶음 (Tag / Event / Action / Env) |
 | `CondNode` | 없음 (`&self`) | 전이 조건 판정 |
-| `StateNode` | 있음 | 상태 + 그 상태에서만 사는 변수 |
+| `State` | 없음 (정적) | 한 상태의 태그와 진입/이탈 액션 |
 | `Edge` | 없음 (정적) | 표의 한 줄 |
-| `Machine` | 현재 태그 + 상태 노드들 | 실행기 |
+| `Machine` | 현재 태그 | 실행기 |
 
 ## 빠른 시작
 
 가장 작은 예제로 훑어본다. 전등을 껐다 켰다 하는 2상태 FSM이다.
 
 ```rust
-use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, StateNode};
+use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
 
 // 1. Domain — 컨트롤러가 쓸 타입들을 한 곳에 묶는다.
 //    tags!/events! 가 enum과 커버리지용 전수 목록을 함께 만든다.
@@ -68,7 +68,7 @@ impl Domain for Light {
 
     // perform 이 유일한 필수 메서드다.
     // kind / all_tags / all_kinds 는 tags!/events! 가 만든 구현으로 해결된다.
-    fn perform(action: Action, _ev: &Event, _state: &dyn StateNode<Self>, _world: &mut Env) {
+    fn perform(action: Action, _ev: &Event, _world: &mut Env) {
         match action {
             Action::TurnOn => println!("on"),
             Action::TurnOff => println!("off"),
@@ -76,9 +76,11 @@ impl Domain for Light {
     }
 }
 
-// 2. 상태 — 진입/이탈 액션은 state! 매크로로 선언한다.
-fsm::state!(Light, Off, tag: Tag::Off, on_enter: [Action::TurnOff]);
-fsm::state!(Light, On, tag: Tag::On, on_enter: [Action::TurnOn]);
+// 2. 상태 — 표의 또 다른 한 장. 진입/이탈 액션을 정적 데이터로 적는다.
+static STATES: &[State<Light>] = &[
+    State { tag: Tag::Off, entry: &[Action::TurnOff], exit: &[] },
+    State { tag: Tag::On,  entry: &[Action::TurnOn],  exit: &[] },
+];
 
 // 3. 표 — 전이는 여기 한 곳에만 있다.
 static EDGES: &[Edge<Light>] = &[
@@ -106,7 +108,7 @@ static IGNORES: &[Ignore<Light>] = &[];
 
 fn main() {
     let mut world = Env;
-    let mut m = Machine::new(Tag::Off, vec![Box::new(Off), Box::new(On)], EDGES, IGNORES);
+    let mut m = Machine::new(Tag::Off, STATES, EDGES, IGNORES);
 
     m.dispatch(&Event::Toggle, &mut world); // -> on, state = On
     m.dispatch(&Event::Toggle, &mut world); // -> off, state = Off
@@ -126,7 +128,7 @@ fn main() {
 
 ```rust
 pub trait Domain: Sized + 'static {
-    type Tag: Enumerable;                        // 상태 식별자 (값은 StateNode가 가짐)
+    type Tag: Enumerable;                        // 상태 식별자
     // 이벤트 본체 (payload 포함). Debug 는 dispatch 로그가 payload 를 담기 위해 필요하다.
     type Event: HasKind<Kind = Self::EventKind> + Debug;
     type EventKind: Enumerable;                  // 이벤트 종류 — 엣지가 이걸로 매칭
@@ -134,8 +136,7 @@ pub trait Domain: Sized + 'static {
     type Env: ?Sized;                    // 바깥 세상 (api + DB)
 
     // 유일한 필수 메서드.
-    fn perform(action: Self::Action, ev: &Self::Event,
-               state: &dyn StateNode<Self>, world: &mut Self::Env);
+    fn perform(action: Self::Action, ev: &Self::Event, world: &mut Self::Env);
 
     // 커버리지 검사용 전수 목록. Enumerable::ALL 을 쓰는 기본 구현이 있으므로
     // 일부만 검사하고 싶을 때만 재정의한다.
@@ -183,15 +184,16 @@ fsm::events! {
 여러 이벤트 변형을 한 종류로 묶고 싶으면(N:1 매핑) 매크로 대신 `HasKind`를 직접
 구현한다. `Event`가 외부 크레이트 타입이라 고아 규칙에 걸리면 newtype으로 감싼다.
 
-`perform`은 **`Env`를 변경할 수 있는 유일한 지점이다** — 상태 노드와 조건
-노드는 `&Env`만 받으므로 읽기만 한다. 그래서 이 컨트롤러가 바깥 세상에 하는
+`perform`은 **`Env`를 변경할 수 있는 유일한 지점이다** — 조건 노드는 `&Env`만
+받으므로 읽기만 한다. 그래서 이 컨트롤러가 바깥 세상에 하는
 모든 변경은 `Action` 값을 거치고, 실행된 액션은 `Taken::actions`에 값 그대로
 남는다. `perform`은 `Machine`에 접근할 수 없어 전이를 유발할 수는 없다.
 
 `ev`는 처리 중인 이벤트다. `Edge::run`은 `&'static`이라 컴파일 타임 상수만
 담을 수 있으므로, 런타임 값이 필요한 액션은 여기서 `ev`에서 꺼낸다.
-`Goto::Internal` 전이는 `on_enter`/`on_exit`가 돌지 않으니 **payload에 접근할
-수 있는 유일한 경로**이기도 하다.
+진입/이탈 액션 목록도 `&'static`이라 마찬가지다. 상태에 종속된 값은 `Env`에
+두고, 그 상태의 `entry` 액션이 `ev`에서 꺼내 쓰고 `exit` 액션이 지우면 값의
+수명 전체가 표와 다이어그램에 드러난다.
 
 ```rust
 // 표에는 상수만 (다이어그램에 이름이 찍힌다)
@@ -203,23 +205,21 @@ Action::RecordPosition => {
 }
 ```
 
-### 2. 상태 — `StateNode` / `state!`
+### 2. 상태 — `State`
 
-상태는 태그뿐 아니라 **그 상태에서만 사는 변수**를 가질 수 있다. 단, 전이
-로직은 절대 넣지 않는다 — 전이는 `Edge` 표에만 있어야 표 하나로 전체 구조를
-파악할 수 있다.
+상태는 `Edge`와 마찬가지로 **정적 데이터**다. 태그와 진입/이탈 액션만 담고
+행위는 갖지 않는다. 전이 로직은 물론 넣지 않는다 — 전이는 `Edge` 표에만 있어야
+표 하나로 전체 구조를 파악할 수 있다.
 
 ```rust
-fsm::state!(Domain타입, StructName, tag: Tag::Variant);
-fsm::state!(Domain타입, StructName, tag: Tag::Variant, on_enter: [Action::A, Action::B]);
-fsm::state!(Domain타입, StructName, tag: Tag::Variant, on_exit: [Action::C]);
-fsm::state!(Domain타입, StructName, tag: Tag::Variant,
-            on_enter: [Action::A], on_exit: [Action::C]);
+static STATES: &[State<Domain타입>] = &[
+    State { tag: Tag::Variant, entry: &[Action::A, Action::B], exit: &[Action::C] },
+];
 ```
 
-변수가 있는 상태가 필요하면 매크로 대신 `StateNode`를 직접 구현한다.
-`on_exit`에서 상태 한정 변수를 초기화하는 것이 "이 변수는 이 상태에서만
-유효하다"는 규약을 실제로 보장한다.
+상태에서만 쓰는 변수도 `Env`에 둔다. `entry` 액션으로 초기화하고 `exit` 액션으로
+지우면 "이 값은 이 상태에서만 유효하다"가 다이어그램에 그대로 그려진다 —
+상태 안에 숨겨두면 그 수명이 코드에만 남는다.
 
 ### 3. 조건 — `Cond` (3치 논리) / `CondNode` / `check!`
 
@@ -236,11 +236,8 @@ fsm::cond_node!(Domain타입, CondName, |cx| match cx.event {
 ```
 
 - 조건 노드는 **내부 상태를 가질 수 없다** (`eval`이 `&self`). 필요한 입력은
-  전부 `Cx`(이벤트 `cx.event`, 바깥 세상 `cx.world`, 현재 상태 `cx.state`)로
-  주입된다. 그래야 순수 함수로 테스트할 수 있고, 같은 dispatch 안에서
+  전부 `Cx`(이벤트 `cx.event`, 바깥 세상 `cx.world`)로 주입된다. 그래야 순수 함수로 테스트할 수 있고, 같은 dispatch 안에서
   여러 엣지가 같은 노드를 평가해도 `Memo` 캐시로 한 번만 계산된다.
-- `cx.state_as::<S>()`로 현재 상태 노드를 구체 타입으로 다운캐스트할 수
-  있다 (태그로 분기하지 말고 상태 변수를 직접 읽으라는 뜻).
 - 조건 노드 이름(`name()`)은 머신 안에서 **유일해야 한다** — Memo 캐시 키이자
   다이어그램에 찍히는 이름이기 때문이다. `render::coverage`가 이름은 같은데
   타입이 다른 노드가 있는지 검사해 준다.
@@ -274,8 +271,8 @@ pub struct Edge<D: Domain> {
   (나열한 것만 제외한 모든 상태), `Any`(모든 상태). `AnyExcept`/`Any`는 계층형
   FSM에서 "이 이벤트는 어디서든 받는다" 같은 규칙을 한 줄로 표현해 DRY하게
   만든다.
-- **`Goto<D>`**: `To(Tag)`(다른 상태로 전이, `on_exit`/`on_enter` 실행) 또는
-  `Internal`(상태는 그대로 두고 `run`만 실행 — `on_exit`/`on_enter`는
+- **`Goto<D>`**: `To(Tag)`(다른 상태로 전이, 이탈/진입 액션 실행) 또는
+  `Internal`(상태는 그대로 두고 `run`만 실행 — 이탈/진입 액션은
   **돌지 않는다**).
 - **`OnUnknown`**: `Deny`(모르면 전이하지 않음, fail-closed) 또는
   `Allow`(모르면 전이함).
@@ -297,17 +294,18 @@ pub struct Ignore<D: Domain> {
 ### 5. 실행 — `Machine`
 
 ```rust
-let mut m = Machine::new(초기_태그, vec![Box::new(State1), Box::new(State2), ...], EDGES, IGNORES);
+let mut m = Machine::new(초기_태그, STATES, EDGES, IGNORES);
 
 m.dispatch(&event, &mut world); // -> Option<Taken>
 ```
 
-`dispatch` 실행 순서는 `on_exit(현재 상태)` → `run` → 상태 전이 →
-`on_enter(목표 상태)`다. `Goto::Internal`이면 `run`만 실행된다. 채택된 엣지가
+`dispatch` 실행 순서는 `현재 상태의 exit` → 상태 전이 → `run` →
+`목표 상태의 entry`다. 각 액션은 도달하는 즉시 수행되므로, 이탈 액션은 뒤따르는
+효과가 반영되기 전의 세상을 본다. `Goto::Internal`이면 `run`만 실행된다. 채택된 엣지가
 없으면 `None`을 반환하고, `Ignore`에도 안 걸리면 `log::warn!`을 남긴다
 (로그를 보려면 `env_logger` 등 로거를 초기화해야 한다).
 
-`Machine`의 가변 상태는 **현재 태그와 상태 노드들뿐이고 이벤트 큐가 없다.**
+`Machine`의 가변 상태는 **현재 태그뿐이고 이벤트 큐가 없다.**
 재진입은 큐가 아니라 borrow checker가 막는다 — `dispatch`가 도는 동안 `m`이
 `&mut`로 대출되어 중첩 호출이 컴파일되지 않고, `Domain::perform`은 `Machine`에
 접근할 방법이 없다.
@@ -386,7 +384,7 @@ src/
   cond.rs         // Cond (3치 논리)
   enums.rs        // Enumerable, tags!/events! 매크로
   node.rs         // CondNode, Cx, Expr, Memo, cond_node!/check! 매크로
-  state.rs        // StateNode, state! 매크로
+  state.rs        // State (태그 + 진입/이탈 액션)
   edge.rs         // Edge, Source, Goto, OnUnknown, Ignore
   machine.rs      // Machine (실행기)
   render.rs       // to_mermaid, internal_table, coverage

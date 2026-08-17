@@ -8,7 +8,7 @@
 #![allow(clippy::enum_variant_names)]
 
 use super::{
-    render, Cond, Domain, Edge, Expr, Goto, HasKind, Ignore, Machine, OnUnknown, Source, StateNode,
+    Cond, Domain, Edge, Expr, Goto, HasKind, Ignore, Machine, OnUnknown, Source, State, render,
 };
 
 // ─────────────────────────────────────────── domain
@@ -51,9 +51,6 @@ struct Env {
     /// The event kind each action was performed for, recorded from `perform`'s
     /// `ev` argument.
     performed_for: Vec<Kind>,
-    /// The state each action was performed in, recorded from `perform`'s `state`
-    /// argument.
-    performed_in: Vec<Tag>,
 }
 
 struct RearCam;
@@ -65,10 +62,9 @@ impl Domain for RearCam {
     type Action = Action;
     type Env = Env;
 
-    fn perform(action: Action, ev: &Event, state: &dyn StateNode<Self>, world: &mut Env) {
+    fn perform(action: Action, ev: &Event, world: &mut Env) {
         world.performed.push(action);
         world.performed_for.push(ev.kind());
-        world.performed_in.push(state.tag());
         match action {
             Action::ShowCamera => world.camera_visible = true,
             Action::HideCamera => world.camera_visible = false,
@@ -93,10 +89,18 @@ crate::cond_node!(RearCam, SpeedBelowLimit, |cx| match cx.world.speed {
 
 // ─────────────────────────────────────────── states
 
-crate::state!(RearCam, Off, tag: Tag::Off);
-crate::state!(RearCam, Showing, tag: Tag::Showing,
-              entry: [Action::ShowCamera],
-              exit:  [Action::HideCamera]);
+static STATES: &[State<RearCam>] = &[
+    State {
+        tag: Tag::Off,
+        entry: &[],
+        exit: &[],
+    },
+    State {
+        tag: Tag::Showing,
+        entry: &[Action::ShowCamera],
+        exit: &[Action::HideCamera],
+    },
+];
 
 // ─────────────────────────────────────────── table
 
@@ -153,12 +157,7 @@ static IGNORES: &[Ignore<RearCam>] = &[
 ];
 
 fn machine() -> Machine<RearCam> {
-    Machine::new(
-        Tag::Off,
-        vec![Box::new(Off), Box::new(Showing)],
-        EDGES,
-        IGNORES,
-    )
+    Machine::new(Tag::Off, STATES, EDGES, IGNORES)
 }
 
 fn showing() -> (Machine<RearCam>, Env) {
@@ -184,7 +183,9 @@ fn enters_showing_and_runs_entry_action() {
         ..Default::default()
     };
 
-    let taken = m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w).unwrap();
+    let taken = m
+        .dispatch(&Event::GearChanged(Gear::Reverse), &mut w)
+        .unwrap();
 
     assert_eq!(taken.edge, "CAM_ON");
     assert_eq!(taken.actions, vec![Action::ShowCamera]);
@@ -205,24 +206,19 @@ fn exit_action_runs_on_leaving() {
 }
 
 #[test]
-fn perform_sees_the_state_that_owns_the_action() {
+fn exit_and_entry_actions_run_in_order_across_a_round_trip() {
     let mut m = machine();
     let mut w = Env {
         speed: Some(10.0),
         ..Default::default()
     };
 
-    // Entry action of Showing: performed after the tag moved to Showing.
     m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w);
-    assert_eq!(w.performed, vec![Action::ShowCamera]);
-    assert_eq!(w.performed_in, vec![Tag::Showing]);
-
-    // Exit action of Showing: performed while the machine is still in Showing,
-    // even though the transition ends in Off.
     m.dispatch(&Event::GearChanged(Gear::Drive), &mut w);
+
     assert_eq!(m.tag(), Tag::Off);
     assert_eq!(w.performed, vec![Action::ShowCamera, Action::HideCamera]);
-    assert_eq!(w.performed_in, vec![Tag::Showing, Tag::Showing]);
+    assert!(!w.camera_visible);
 }
 
 #[test]
@@ -245,7 +241,10 @@ fn unknown_denies_transition_when_policy_is_deny() {
         ..Default::default()
     };
 
-    assert!(m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w).is_none());
+    assert!(
+        m.dispatch(&Event::GearChanged(Gear::Reverse), &mut w)
+            .is_none()
+    );
     assert_eq!(m.tag(), Tag::Off);
     assert!(w.performed.is_empty());
 }
@@ -269,7 +268,10 @@ fn declaration_order_is_priority() {
     let (mut m, mut w) = showing();
 
     w.speed = Some(20.0); // !SpeedBelowLimit = True -> the earlier CAM_OFF_SPEED
-    assert_eq!(m.dispatch(&Event::SpeedChanged, &mut w).unwrap().edge, "CAM_OFF_SPEED");
+    assert_eq!(
+        m.dispatch(&Event::SpeedChanged, &mut w).unwrap().edge,
+        "CAM_OFF_SPEED"
+    );
 }
 
 #[test]
@@ -305,9 +307,9 @@ stateDiagram-v2
     Showing --> Off: SpeedChanged<br/>[!SpeedBelowLimit]<br/>unknown=Allow
 ";
 
-    let m = machine();
+    // No machine needed: the diagram comes from the static tables alone.
     assert_eq!(
-        render::to_mermaid::<RearCam>(Tag::Off, EDGES, m.states()),
+        render::to_mermaid::<RearCam>(Tag::Off, EDGES, STATES),
         expected
     );
 }

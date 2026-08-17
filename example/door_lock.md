@@ -4,7 +4,7 @@
 stateDiagram-v2
     [*] --> Locked
     Locked : Locked<br/>entry / Lock, ResetAttempts
-    Unlocked : Unlocked<br/>entry / Unlock
+    Unlocked : Unlocked<br/>entry / Unlock<br/>exit / ClearUnlockCode
     Alarm : Alarm<br/>entry / SoundAlarm
     Maintenance : Maintenance<br/>entry / MaintenanceOn<br/>exit / MaintenanceOff
     Locked --> Unlocked: EnterCode<br/>[CodeCorrect]
