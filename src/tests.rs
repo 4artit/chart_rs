@@ -7,8 +7,11 @@
 // `events!` emits the same variant names for both enums.
 #![allow(clippy::enum_variant_names)]
 
+use std::cell::Cell;
+
 use super::{
-    Cond, Domain, Edge, Expr, Goto, HasKind, Ignore, Machine, OnUnknown, Source, State, render,
+    Cond, Cx, Domain, Edge, Expr, Goto, HasKind, Ignore, Machine, Memo, OnUnknown, Source, State,
+    render,
 };
 
 // ─────────────────────────────────────────── domain
@@ -51,6 +54,9 @@ struct Env {
     /// The event kind each action was performed for, recorded from `perform`'s
     /// `ev` argument.
     performed_for: Vec<Kind>,
+    /// How many times `SpeedBelowLimit` looked the speed up. Guards receive
+    /// `&Env`, so this needs interior mutability.
+    speed_lookups: Cell<u32>,
 }
 
 struct RearCam;
@@ -81,10 +87,14 @@ crate::cond_node!(RearCam, GearIsReverse, |cx| match cx.event {
     _ => Cond::False,
 });
 
-// A context guard: Unknown when the lookup fails.
-crate::cond_node!(RearCam, SpeedBelowLimit, |cx| match cx.world.speed {
-    Some(v) => Cond::from(v < 15.0),
-    None => Cond::Unknown,
+// A context guard: Unknown when the lookup fails. Counts its lookups so that
+// short-circuiting is observable.
+crate::cond_node!(RearCam, SpeedBelowLimit, |cx| {
+    cx.world.speed_lookups.set(cx.world.speed_lookups.get() + 1);
+    match cx.world.speed {
+        Some(v) => Cond::from(v < 15.0),
+        None => Cond::Unknown,
+    }
 });
 
 // ─────────────────────────────────────────── states
@@ -423,6 +433,69 @@ fn render_parenthesises_negated_subexpressions() {
     assert_eq!(NEGATED_AND.render(), "!(GearIsReverse && SpeedBelowLimit)");
     // A negated single node needs no parentheses.
     assert_eq!(crate::check!(!GearIsReverse).render(), "!GearIsReverse");
+}
+
+/// `check!()` with no arguments. An edge with no guard is always taken.
+#[test]
+fn always_is_true_renders_empty_and_references_no_nodes() {
+    let w = Env::default();
+    let ev = Event::PowerChanged;
+    let memo = Memo::new();
+    let cx: Cx<'_, RearCam> = Cx::new(&ev, &w, &memo);
+
+    let always: &Expr<RearCam> = crate::check!();
+
+    assert_eq!(always.eval(&cx), Cond::True);
+    assert_eq!(always.render(), "");
+
+    let mut ids = Vec::new();
+    always.node_ids(&mut ids);
+    assert!(ids.is_empty());
+}
+
+/// `||` has no macro form, so `Expr::Or` is built by hand.
+#[test]
+fn or_short_circuits_on_true() {
+    static EITHER: Expr<RearCam> =
+        Expr::Or(&Expr::Node(&GearIsReverse), &Expr::Node(&SpeedBelowLimit));
+
+    assert_eq!(EITHER.render(), "(GearIsReverse || SpeedBelowLimit)");
+
+    let mut ids = Vec::new();
+    EITHER.node_ids(&mut ids);
+    assert_eq!(ids.len(), 2);
+
+    // Left is True, so the speed is never looked up.
+    let w = Env {
+        speed: None,
+        ..Default::default()
+    };
+    let ev = Event::GearChanged(Gear::Reverse);
+    let memo = Memo::new();
+    assert_eq!(EITHER.eval(&Cx::new(&ev, &w, &memo)), Cond::True);
+    assert_eq!(w.speed_lookups.get(), 0);
+
+    // Left is False, so the right operand decides — and its lookup fails.
+    let ev = Event::GearChanged(Gear::Drive);
+    let memo = Memo::new();
+    assert_eq!(EITHER.eval(&Cx::new(&ev, &w, &memo)), Cond::Unknown);
+    assert_eq!(w.speed_lookups.get(), 1);
+}
+
+/// A `False` on the left settles an `And`, so the right operand is skipped.
+#[test]
+fn and_short_circuits_on_false() {
+    let w = Env {
+        speed: None,
+        ..Default::default()
+    };
+    let ev = Event::GearChanged(Gear::Drive); // GearIsReverse -> False
+    let memo = Memo::new();
+
+    let both = crate::check!(GearIsReverse && SpeedBelowLimit);
+
+    assert_eq!(both.eval(&Cx::new(&ev, &w, &memo)), Cond::False);
+    assert_eq!(w.speed_lookups.get(), 0);
 }
 
 #[test]
