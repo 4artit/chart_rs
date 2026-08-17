@@ -1,7 +1,7 @@
 //! Three-valued logic. `Unknown` means "a lookup failed, so this is undecidable".
 //!
 //! Collapsing that case into `bool` hides the failure policy inside the guard.
-//! Keeping it separate moves the policy out to [`crate::OnUnknown`], where the
+//! Keeping it separate moves the policy out to [`crate::machine::OnUnknown`], where the
 //! diagram can show it.
 
 /// The result of evaluating a guard.

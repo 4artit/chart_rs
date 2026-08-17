@@ -1,6 +1,16 @@
-//! The executor.
+//! The state machine layer: a transition table and the executor that runs it.
 
-use super::{Cond, Cx, Domain, Edge, Goto, HasKind, Ignore, Memo, OnUnknown, State, render};
+mod cond;
+mod edge;
+mod node;
+mod state;
+
+pub use cond::Cond;
+pub use edge::{Edge, Goto, Ignore, OnUnknown, Source};
+pub use node::{CondNode, Cx, Expr, Memo};
+pub use state::State;
+
+use crate::{Domain, HasKind, render};
 
 /// The outcome of a transition, for tests and logs.
 pub struct Taken<D: Domain> {

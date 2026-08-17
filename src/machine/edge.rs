@@ -1,6 +1,8 @@
 //! One row of the transition table.
 
-use super::{Domain, Expr};
+use crate::Domain;
+
+use super::Expr;
 
 /// Which states an edge departs from. This is a set of states, not a guard.
 pub enum Source<D: Domain> {

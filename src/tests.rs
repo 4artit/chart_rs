@@ -9,10 +9,8 @@
 
 use std::cell::Cell;
 
-use super::{
-    Cond, Cx, Domain, Edge, Expr, Goto, HasKind, Ignore, Machine, Memo, OnUnknown, Source, State,
-    render,
-};
+use super::machine::{Cond, Cx, Edge, Expr, Goto, Ignore, Machine, Memo, OnUnknown, Source, State};
+use super::{Domain, HasKind, render};
 
 // ─────────────────────────────────────────── domain
 
@@ -624,7 +622,7 @@ crate::cond_node!(Broken, Duplicate, |_cx| Cond::True);
 struct AlsoDuplicate;
 struct StillDuplicate;
 
-impl crate::CondNode<Broken> for AlsoDuplicate {
+impl crate::machine::CondNode<Broken> for AlsoDuplicate {
     fn name(&self) -> &'static str {
         "Duplicate"
     }
@@ -633,7 +631,7 @@ impl crate::CondNode<Broken> for AlsoDuplicate {
     }
 }
 
-impl crate::CondNode<Broken> for StillDuplicate {
+impl crate::machine::CondNode<Broken> for StillDuplicate {
     fn name(&self) -> &'static str {
         "Duplicate"
     }

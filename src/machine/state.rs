@@ -1,6 +1,6 @@
 //! States: a tag plus the actions that run on entering and leaving it.
 
-use super::Domain;
+use crate::Domain;
 
 /// One state.
 ///
@@ -11,7 +11,7 @@ use super::Domain;
 /// Like [`super::Edge`], this is static data with no behaviour of its own. A value
 /// that only some states care about lives in [`Domain::Env`], written by the
 /// actions declared here, so that every change is named in
-/// [`super::Taken::actions`] and drawn by [`super::render::to_mermaid`].
+/// [`super::Taken::actions`] and drawn by [`crate::render::to_mermaid`].
 pub struct State<D: Domain> {
     pub tag: D::Tag,
     /// Actions run on entry, in declaration order.

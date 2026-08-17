@@ -1,18 +1,17 @@
-//! A declarative finite state machine framework.
+//! A declarative controller framework.
 //!
-//! Transitions are declared as a single `&'static [Edge<D>]` table. Execution,
-//! diagram generation, and exhaustive coverage checking are all derived from
-//! that one table, so the table is the only place transition logic lives.
+//! A controller declares what it reacts to and what it does about it as static
+//! data. Execution, diagram generation and exhaustive gap checking are all
+//! derived from that one declaration, so it is the only place the logic lives.
 //!
-//! # Components
+//! # Layers
 //!
-//! | Item | Mutable state | Role |
-//! |---|---|---|
-//! | [`Domain`] | none | Type bundle for one controller (Tag / Event / Action / Env) |
-//! | [`CondNode`] | none (`&self`) | Evaluates a transition guard |
-//! | [`State`] | none (static) | One state's tag and entry/exit actions |
-//! | [`Edge`] | none (static) | One row of the table |
-//! | [`Machine`] | current tag | The executor |
+//! | Module | For |
+//! |---|---|
+//! | [`machine`] | Controllers with states: a transition table and its executor |
+//! | [`render`] | Diagrams and gap reports derived from a declaration |
+//!
+//! [`Domain`] bundles the types a controller works with and is shared by both.
 //!
 //! # Declaration macros
 //!
@@ -20,26 +19,18 @@
 //! |---|---|
 //! | [`tags!`] | State tag enum + [`Enumerable`] |
 //! | [`events!`] | Event enum + kind enum + [`HasKind`] + [`Enumerable`] |
-//! | [`cond_node!`] | A [`CondNode`] impl |
-//! | [`check!`] | A guard [`Expr`] tree |
+//! | [`cond_node!`] | A [`machine::CondNode`] impl |
+//! | [`check!`] | A guard [`machine::Expr`] tree |
 
-mod cond;
-mod edge;
 mod enums;
-mod machine;
-mod node;
+
+pub mod machine;
 pub mod render;
-mod state;
 
 #[cfg(test)]
 mod tests;
 
-pub use cond::Cond;
-pub use edge::{Edge, Goto, Ignore, OnUnknown, Source};
 pub use enums::{Enumerable, HasKind};
-pub use machine::{Machine, Taken};
-pub use node::{CondNode, Cx, Expr, Memo};
-pub use state::State;
 
 use std::fmt::Debug;
 
@@ -59,7 +50,7 @@ pub trait Domain: Sized + 'static {
     ///
     /// `Debug` is required so that the dispatch log carries the payload. An action
     /// that reads a runtime value out of `ev` is named but not valued in
-    /// [`Taken::actions`], and the log line is what closes that gap.
+    /// [`machine::Taken::actions`], and the log line is what closes that gap.
     type Event: HasKind<Kind = Self::EventKind> + Debug;
 
     /// Event kind: a payload-free tag. Edges match on this.
@@ -80,18 +71,18 @@ pub trait Domain: Sized + 'static {
     ///
     /// This is the only place `Env` can be mutated; guards receive `&Env`. Every
     /// change this controller makes to the world therefore passes through an
-    /// [`Domain::Action`] value that is recorded in [`Taken::actions`] and drawn
+    /// [`Domain::Action`] value that is recorded in [`machine::Taken::actions`] and drawn
     /// by [`render::to_mermaid`].
     ///
     /// `ev` is the event being dispatched. An action may read values from it that
     /// cannot be baked into an action list — those are `&'static`, so they hold
     /// compile-time constants only. State-dependent values therefore live in
-    /// `Env`, initialised by a [`State::entry`] action and cleared by a
-    /// [`State::exit`] one.
+    /// `Env`, initialised by a [`machine::State::entry`] action and cleared by a
+    /// [`machine::State::exit`] one.
     ///
     /// `Machine` is not reachable from here, so an action cannot trigger a
     /// transition. Follow-up events are decided by the caller from the returned
-    /// [`Taken`].
+    /// [`machine::Taken`].
     fn perform(action: Self::Action, ev: &Self::Event, world: &mut Self::Env);
 
     /// Every state, for coverage checking.

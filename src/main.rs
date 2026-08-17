@@ -10,7 +10,8 @@
 //! the diagram: `unlock_code` follows `Unlocked`, and `attempts` is reset on entry
 //! to `Locked` while being incremented by an internal transition.
 
-use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, State, render};
+use fsm::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
+use fsm::{Domain, render};
 
 fsm::tags! {
     enum Tag {

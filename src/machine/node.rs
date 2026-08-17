@@ -3,7 +3,9 @@
 use std::any::Any;
 use std::cell::RefCell;
 
-use super::{Cond, Domain};
+use crate::Domain;
+
+use super::Cond;
 
 /// One transition guard.
 ///
@@ -14,7 +16,7 @@ pub trait CondNode<D: Domain>: Sync + Any {
     /// The name shown in diagrams and logs. It must be **unique within a
     /// machine**, since it is the [`Memo`] key.
     ///
-    /// [`super::render::coverage`] verifies uniqueness.
+    /// [`crate::render::coverage`] verifies uniqueness.
     fn name(&self) -> &'static str;
 
     /// Evaluates the guard. Must not modify the world.
@@ -146,11 +148,11 @@ macro_rules! cond_node {
         #[derive(Copy, Clone)]
         pub struct $name;
 
-        impl $crate::CondNode<$dom> for $name {
+        impl $crate::machine::CondNode<$dom> for $name {
             fn name(&self) -> &'static str {
                 stringify!($name)
             }
-            fn eval(&self, $cx: &$crate::Cx<'_, $dom>) -> $crate::Cond {
+            fn eval(&self, $cx: &$crate::machine::Cx<'_, $dom>) -> $crate::machine::Cond {
                 $body
             }
         }
@@ -164,19 +166,19 @@ macro_rules! cond_node {
 /// required.
 #[macro_export]
 macro_rules! check {
-    () => { &$crate::Expr::Always };
+    () => { &$crate::machine::Expr::Always };
     (! $n:ident && $($rest:tt)*) => {
-        &$crate::Expr::And(
-            &$crate::Expr::Not(&$crate::Expr::Node(&$n)),
+        &$crate::machine::Expr::And(
+            &$crate::machine::Expr::Not(&$crate::machine::Expr::Node(&$n)),
             $crate::check!($($rest)*),
         )
     };
     ($n:ident && $($rest:tt)*) => {
-        &$crate::Expr::And(
-            &$crate::Expr::Node(&$n),
+        &$crate::machine::Expr::And(
+            &$crate::machine::Expr::Node(&$n),
             $crate::check!($($rest)*),
         )
     };
-    (! $n:ident) => { &$crate::Expr::Not(&$crate::Expr::Node(&$n)) };
-    ($n:ident) => { &$crate::Expr::Node(&$n) };
+    (! $n:ident) => { &$crate::machine::Expr::Not(&$crate::machine::Expr::Node(&$n)) };
+    ($n:ident) => { &$crate::machine::Expr::Node(&$n) };
 }
