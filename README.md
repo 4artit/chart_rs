@@ -31,6 +31,7 @@ fsm = { path = "../fsm" }
 |---|---|---|
 | `Domain` | — | 컨트롤러가 쓸 타입 묶음 (Tag / Event / Action / Env) |
 | `CondNode` | 없음 (`&self`) | 전이 조건 판정 |
+| `feature::Feature` | 기능별 | 상태 없는 컨트롤러의 한 기능 — 받는 이벤트와 내는 액션을 선언 |
 | `State` | 없음 (정적) | 한 상태의 태그와 진입/이탈 액션 |
 | `Edge` | 없음 (정적) | 표의 한 줄 |
 | `Machine` | 현재 태그 | 실행기 |
@@ -40,7 +41,8 @@ fsm = { path = "../fsm" }
 가장 작은 예제로 훑어본다. 전등을 껐다 켰다 하는 2상태 FSM이다.
 
 ```rust
-use fsm::{Cond, Domain, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
+use fsm::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
+use fsm::{Domain, StateDomain};
 
 // 1. Domain — 컨트롤러가 쓸 타입들을 한 곳에 묶는다.
 //    tags!/events! 가 enum과 커버리지용 전수 목록을 함께 만든다.
@@ -60,7 +62,6 @@ struct Env;
 struct Light;
 
 impl Domain for Light {
-    type Tag = Tag;
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
@@ -74,6 +75,11 @@ impl Domain for Light {
             Action::TurnOff => println!("off"),
         }
     }
+}
+
+// 상태가 있으므로 StateDomain 도 구현한다.
+impl StateDomain for Light {
+    type Tag = Tag;
 }
 
 // 2. 상태 — 표의 또 다른 한 장. 진입/이탈 액션을 정적 데이터로 적는다.
@@ -128,7 +134,6 @@ fn main() {
 
 ```rust
 pub trait Domain: Sized + 'static {
-    type Tag: Enumerable;                        // 상태 식별자
     // 이벤트 본체 (payload 포함). Debug 는 dispatch 로그가 payload 를 담기 위해 필요하다.
     type Event: HasKind<Kind = Self::EventKind> + Debug;
     type EventKind: Enumerable;                  // 이벤트 종류 — 엣지가 이걸로 매칭
@@ -140,8 +145,13 @@ pub trait Domain: Sized + 'static {
 
     // 커버리지 검사용 전수 목록. Enumerable::ALL 을 쓰는 기본 구현이 있으므로
     // 일부만 검사하고 싶을 때만 재정의한다.
-    fn all_tags() -> &'static [Self::Tag] { ... }
     fn all_kinds() -> &'static [Self::EventKind] { ... }
+}
+
+// 상태가 있는 컨트롤러만 추가로 구현한다.
+pub trait StateDomain: Domain {
+    type Tag: Enumerable;                        // 상태 식별자
+    fn all_tags() -> &'static [Self::Tag] { ... }
 }
 ```
 

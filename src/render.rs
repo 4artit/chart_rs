@@ -1,11 +1,15 @@
-//! Artifacts derived from the transition table: a mermaid diagram and an
-//! exhaustive coverage matrix.
+//! Artifacts derived from a controller's declaration: mermaid diagrams, tables,
+//! and exhaustive gap reports.
+//!
+//! The [`crate::machine`] functions read a transition table; the [`crate::feature`]
+//! ones read a list of [`FeatureInfo`].
 
 use std::any::TypeId;
 use std::fmt::Write as _;
 
-use crate::Domain;
+use crate::feature::FeatureInfo;
 use crate::machine::{Edge, Goto, Ignore, OnUnknown, State};
+use crate::{Domain, StateDomain};
 
 /// The result of checking every `(state × event kind)` combination.
 #[derive(Debug, Default)]
@@ -32,7 +36,7 @@ impl Coverage {
 }
 
 /// Checks the transition table.
-pub fn coverage<D: Domain>(
+pub fn coverage<D: StateDomain>(
     initial: D::Tag,
     edges: &'static [Edge<D>],
     ignores: &'static [Ignore<D>],
@@ -111,7 +115,7 @@ pub fn coverage<D: Domain>(
 ///
 /// The output converts to PlantUML almost line for line; see
 /// `scripts/mermaid_to_plantuml.sh`.
-pub fn to_mermaid<D: Domain>(
+pub fn to_mermaid<D: StateDomain>(
     initial: D::Tag,
     edges: &'static [Edge<D>],
     states: &'static [State<D>],
@@ -165,7 +169,7 @@ pub fn to_mermaid<D: Domain>(
 }
 
 /// Tabulates the transitions that do not change state.
-pub fn internal_table<D: Domain>(edges: &'static [Edge<D>]) -> String {
+pub fn internal_table<D: StateDomain>(edges: &'static [Edge<D>]) -> String {
     let mut s =
         String::from("| state | event | guard | actions | edge id |\n|---|---|---|---|---|\n");
     for e in edges {
@@ -188,7 +192,7 @@ pub fn internal_table<D: Domain>(edges: &'static [Edge<D>]) -> String {
 }
 
 /// Tabulates the deliberately unhandled combinations and their reasons.
-pub fn ignore_table<D: Domain>(ignores: &'static [Ignore<D>]) -> String {
+pub fn ignore_table<D: StateDomain>(ignores: &'static [Ignore<D>]) -> String {
     let mut s = String::from("| state | event | reason |\n|---|---|---|\n");
     for i in ignores {
         for from in i.from.expand() {
@@ -204,6 +208,52 @@ fn join_actions<A: std::fmt::Debug>(actions: &[A]) -> String {
     actions
         .iter()
         .map(|a| format!("{a:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+// ─────────────────────────────────────────── feature layer
+
+/// Tabulates what each feature reacts to and emits.
+pub fn io_table<D: Domain>(features: &[FeatureInfo<D>]) -> String {
+    let mut s = String::from("| feature | handles | emits |\n|---|---|---|\n");
+    for f in features {
+        let _ = writeln!(
+            s,
+            "| `{}` | {} | {} |",
+            f.name,
+            join_or_dash(f.handles),
+            join_or_dash(f.emits)
+        );
+    }
+    s
+}
+
+/// Draws events → features → actions.
+///
+/// Node ids carry a prefix because a feature and the action it emits routinely
+/// share a name; without one, mermaid merges them into a single node with a
+/// self-loop.
+pub fn io_flowchart<D: Domain>(features: &[FeatureInfo<D>]) -> String {
+    let mut s = String::from("flowchart LR\n");
+    for f in features {
+        for k in f.handles {
+            let _ = writeln!(s, "    ev_{k:?}[\"{k:?}\"] --> ft_{0}[\"{0}\"]", f.name);
+        }
+        for a in f.emits {
+            let _ = writeln!(s, "    ft_{0}[\"{0}\"] --> ac_{a:?}[\"{a:?}\"]", f.name);
+        }
+    }
+    s
+}
+
+fn join_or_dash<T: std::fmt::Debug>(items: &[T]) -> String {
+    if items.is_empty() {
+        return "—".into();
+    }
+    items
+        .iter()
+        .map(|i| format!("`{i:?}`"))
         .collect::<Vec<_>>()
         .join(", ")
 }

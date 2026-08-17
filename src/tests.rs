@@ -9,8 +9,9 @@
 
 use std::cell::Cell;
 
+use super::feature::{self, Feature, FeatureInfo};
 use super::machine::{Cond, Cx, Edge, Expr, Goto, Ignore, Machine, Memo, OnUnknown, Source, State};
-use super::{Domain, HasKind, render};
+use super::{Domain, Enumerable, HasKind, StateDomain, render};
 
 // ─────────────────────────────────────────── domain
 
@@ -43,6 +44,11 @@ enum Action {
     UpdateOverlay,
 }
 
+// Only needed by `feature::unemitted_actions`; `Domain` does not require it.
+impl Enumerable for Action {
+    const ALL: &'static [Self] = &[Self::ShowCamera, Self::HideCamera, Self::UpdateOverlay];
+}
+
 #[derive(Default)]
 struct Env {
     /// `None` models a failed lookup, which yields `Cond::Unknown`.
@@ -60,7 +66,6 @@ struct Env {
 struct RearCam;
 
 impl Domain for RearCam {
-    type Tag = Tag;
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
@@ -75,6 +80,10 @@ impl Domain for RearCam {
             Action::UpdateOverlay => {}
         }
     }
+}
+
+impl StateDomain for RearCam {
+    type Tag = Tag;
 }
 
 // ─────────────────────────────────────────── guards
@@ -557,13 +566,16 @@ fn ignore_any_except_matches_multiple_tags() {
 struct PartialCam;
 
 impl Domain for PartialCam {
-    type Tag = Tag;
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
     type Env = Env;
 
     fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
+}
+
+impl StateDomain for PartialCam {
+    type Tag = Tag;
 
     fn all_tags() -> &'static [Tag] {
         &[Tag::Off]
@@ -608,13 +620,16 @@ fn an_edge_targeting_a_tag_outside_the_state_table_is_rejected() {
 struct Broken;
 
 impl Domain for Broken {
-    type Tag = Tag;
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
     type Env = Env;
 
     fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
+}
+
+impl StateDomain for Broken {
+    type Tag = Tag;
 }
 
 crate::cond_node!(Broken, Duplicate, |_cx| Cond::True);
@@ -715,4 +730,130 @@ fn internal_table_dashes_an_empty_guard() {
 
     assert!(table.contains("`SILENT_INTERNAL`"), "{table}");
     assert!(table.contains("`—`"), "{table}");
+}
+
+// ─────────────────────────────────────────── feature layer
+// The same domain, driven without a transition table. `RearCam` has states, but
+// nothing about `Feature` requires them — it only needs `Domain`.
+
+struct Camera;
+
+impl Feature<RearCam> for Camera {
+    const INFO: FeatureInfo<RearCam> = FeatureInfo {
+        name: "Camera",
+        handles: &[Kind::GearChanged],
+        emits: &[Action::ShowCamera, Action::HideCamera],
+    };
+
+    fn handle(&mut self, ev: &Event, _world: &Env, out: &mut Vec<Action>) {
+        if let Event::GearChanged(g) = ev {
+            out.push(if *g == Gear::Reverse {
+                Action::ShowCamera
+            } else {
+                Action::HideCamera
+            });
+        }
+    }
+}
+
+struct Overlay;
+
+impl Feature<RearCam> for Overlay {
+    const INFO: FeatureInfo<RearCam> = FeatureInfo {
+        name: "Overlay",
+        handles: &[Kind::SpeedChanged],
+        emits: &[Action::UpdateOverlay],
+    };
+
+    fn handle(&mut self, _ev: &Event, world: &Env, out: &mut Vec<Action>) {
+        if world.speed.is_some() {
+            out.push(Action::UpdateOverlay);
+        }
+    }
+}
+
+static CAMERA_FEATURES: &[FeatureInfo<RearCam>] = &[Camera::INFO, Overlay::INFO];
+
+#[test]
+fn dispatch_runs_only_the_declared_kinds() {
+    let mut cam = Camera;
+    let mut w = Env::default();
+    let mut out = Vec::new();
+
+    // Declared: reaches the handler.
+    feature::dispatch(&mut cam, &Event::GearChanged(Gear::Reverse), &w, &mut out);
+    assert_eq!(out, vec![Action::ShowCamera]);
+
+    // Not declared: the handler never runs, so nothing is emitted.
+    w.speed = Some(10.0);
+    feature::dispatch(&mut cam, &Event::SpeedChanged, &w, &mut out);
+    assert_eq!(out, vec![Action::ShowCamera]);
+}
+
+#[test]
+fn io_table_lists_each_feature() {
+    let table = render::io_table(CAMERA_FEATURES);
+
+    assert!(
+        table.contains("| `Camera` | `GearChanged` | `ShowCamera`, `HideCamera` |"),
+        "{table}"
+    );
+    assert!(
+        table.contains("| `Overlay` | `SpeedChanged` | `UpdateOverlay` |"),
+        "{table}"
+    );
+}
+
+#[test]
+fn io_flowchart_keeps_features_and_actions_apart() {
+    let chart = render::io_flowchart(CAMERA_FEATURES);
+
+    assert!(chart.contains(r#"ev_GearChanged["GearChanged"] --> ft_Camera["Camera"]"#));
+    assert!(chart.contains(r#"ft_Camera["Camera"] --> ac_ShowCamera["ShowCamera"]"#));
+}
+
+#[test]
+fn unhandled_kinds_reports_what_no_feature_takes() {
+    // PowerChanged is in the event enum but no feature declares it.
+    assert_eq!(
+        feature::unhandled_kinds(CAMERA_FEATURES),
+        vec![Kind::PowerChanged]
+    );
+}
+
+#[test]
+fn unemitted_actions_reports_what_no_feature_produces() {
+    let only_camera = &[Camera::INFO];
+
+    assert_eq!(
+        feature::unemitted_actions(only_camera),
+        vec![Action::UpdateOverlay]
+    );
+}
+
+/// A feature that emits something it did not declare. `dispatch` catches it in
+/// debug builds rather than letting the table quietly go stale.
+struct Liar;
+
+impl Feature<RearCam> for Liar {
+    const INFO: FeatureInfo<RearCam> = FeatureInfo {
+        name: "Liar",
+        handles: &[Kind::GearChanged],
+        emits: &[Action::ShowCamera],
+    };
+
+    fn handle(&mut self, _ev: &Event, _world: &Env, out: &mut Vec<Action>) {
+        out.push(Action::UpdateOverlay);
+    }
+}
+
+#[test]
+#[should_panic(expected = "Liar: emitted an action it does not declare")]
+fn dispatch_rejects_an_undeclared_action() {
+    feature::dispatch(
+        &mut Liar,
+        &Event::GearChanged(Gear::Reverse),
+        &Env::default(),
+        &mut Vec::new(),
+    );
 }

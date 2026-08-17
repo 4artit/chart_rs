@@ -8,10 +8,12 @@
 //!
 //! | Module | For |
 //! |---|---|
+//! | [`feature`] | Controllers with no states: what each feature reacts to and emits |
 //! | [`machine`] | Controllers with states: a transition table and its executor |
-//! | [`render`] | Diagrams and gap reports derived from a declaration |
+//! | [`render`] | Diagrams and gap reports derived from either declaration |
 //!
-//! [`Domain`] bundles the types a controller works with and is shared by both.
+//! [`Domain`] bundles the types a controller works with and is shared by both
+//! layers, so a feature that grows states keeps the same declaration.
 //!
 //! # Declaration macros
 //!
@@ -24,6 +26,7 @@
 
 mod enums;
 
+pub mod feature;
 pub mod machine;
 pub mod render;
 
@@ -37,13 +40,9 @@ use std::fmt::Debug;
 /// The set of types one controller works with.
 ///
 /// Bundling them into a single trait keeps the whole framework generic over one
-/// type parameter `D` instead of five.
+/// type parameter `D` instead of four. A controller that also has states
+/// implements [`StateDomain`] on top of this.
 pub trait Domain: Sized + 'static {
-    /// State identifier. Payloads live in [`Domain::Event`]; only the tag is here.
-    ///
-    /// Declaring it with [`tags!`] also generates the [`Enumerable`] impl.
-    type Tag: Enumerable;
-
     /// Event body, including payload.
     ///
     /// Declaring it with [`events!`] also generates the [`HasKind`] impl.
@@ -85,17 +84,28 @@ pub trait Domain: Sized + 'static {
     /// [`machine::Taken`].
     fn perform(action: Self::Action, ev: &Self::Event, world: &mut Self::Env);
 
+    /// Every event kind, for gap checking.
+    ///
+    /// The default uses [`Enumerable::ALL`].
+    fn all_kinds() -> &'static [Self::EventKind] {
+        <Self::EventKind as Enumerable>::ALL
+    }
+}
+
+/// A [`Domain`] whose controller also has states, for the [`machine`] layer.
+///
+/// Split from `Domain` so that a controller with no states — one built from
+/// [`feature::Feature`] alone — does not have to invent a tag enum.
+pub trait StateDomain: Domain {
+    /// State identifier. Payloads live in [`Domain::Event`]; only the tag is here.
+    ///
+    /// Declaring it with [`tags!`] also generates the [`Enumerable`] impl.
+    type Tag: Enumerable;
+
     /// Every state, for coverage checking.
     ///
     /// The default uses [`Enumerable::ALL`]. Override only to check a subset.
     fn all_tags() -> &'static [Self::Tag] {
         <Self::Tag as Enumerable>::ALL
-    }
-
-    /// Every event kind, for coverage checking.
-    ///
-    /// The default uses [`Enumerable::ALL`].
-    fn all_kinds() -> &'static [Self::EventKind] {
-        <Self::EventKind as Enumerable>::ALL
     }
 }

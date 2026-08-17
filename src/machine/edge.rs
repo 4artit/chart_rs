@@ -1,11 +1,11 @@
 //! One row of the transition table.
 
-use crate::Domain;
+use crate::StateDomain;
 
 use super::Expr;
 
 /// Which states an edge departs from. This is a set of states, not a guard.
-pub enum Source<D: Domain> {
+pub enum Source<D: StateDomain> {
     These(&'static [D::Tag]),
     /// Every state except the listed ones. Gives the DRY benefit of hierarchical
     /// state machines without the hierarchy.
@@ -13,7 +13,7 @@ pub enum Source<D: Domain> {
     Any,
 }
 
-impl<D: Domain> Source<D> {
+impl<D: StateDomain> Source<D> {
     pub fn matches(&self, tag: D::Tag) -> bool {
         match self {
             Self::These(list) => list.contains(&tag),
@@ -34,7 +34,7 @@ impl<D: Domain> Source<D> {
 }
 
 /// The target of a transition.
-pub enum Goto<D: Domain> {
+pub enum Goto<D: StateDomain> {
     To(D::Tag),
     /// Stay in the current state. `on_exit` and `on_enter` do **not** run.
     Internal,
@@ -53,7 +53,7 @@ pub enum OnUnknown {
 ///
 /// When several edges match the same `(state, event kind)`, **declaration order
 /// is priority**.
-pub struct Edge<D: Domain> {
+pub struct Edge<D: StateDomain> {
     /// Stable identifier, for requirement tracing and golden diffs. It must
     /// survive reordering of the table.
     pub id: &'static str,
@@ -70,13 +70,13 @@ pub struct Edge<D: Domain> {
 ///
 /// Declaring these is what lets coverage checking tell a gap apart from an
 /// intentional omission, so `why` is required.
-pub struct Ignore<D: Domain> {
+pub struct Ignore<D: StateDomain> {
     pub from: Source<D>,
     pub when: &'static [D::EventKind],
     pub why: &'static str,
 }
 
-impl<D: Domain> Ignore<D> {
+impl<D: StateDomain> Ignore<D> {
     pub fn matches(&self, tag: D::Tag, kind: D::EventKind) -> bool {
         self.from.matches(tag) && self.when.contains(&kind)
     }

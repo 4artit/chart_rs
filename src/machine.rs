@@ -10,10 +10,10 @@ pub use edge::{Edge, Goto, Ignore, OnUnknown, Source};
 pub use node::{CondNode, Cx, Expr, Memo};
 pub use state::State;
 
-use crate::{Domain, HasKind, render};
+use crate::{HasKind, StateDomain, render};
 
 /// The outcome of a transition, for tests and logs.
-pub struct Taken<D: Domain> {
+pub struct Taken<D: StateDomain> {
     /// The id of the edge that was selected.
     pub edge: &'static str,
     /// The actions that ran, in `exit_actions` → `run` → `entry_actions` order.
@@ -21,7 +21,7 @@ pub struct Taken<D: Domain> {
 }
 
 // Derives would bound `D` itself; these bound only what is actually used.
-impl<D: Domain> std::fmt::Debug for Taken<D> {
+impl<D: StateDomain> std::fmt::Debug for Taken<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Taken")
             .field("edge", &self.edge)
@@ -30,7 +30,7 @@ impl<D: Domain> std::fmt::Debug for Taken<D> {
     }
 }
 
-impl<D: Domain> Clone for Taken<D> {
+impl<D: StateDomain> Clone for Taken<D> {
     fn clone(&self) -> Self {
         Self {
             edge: self.edge,
@@ -39,7 +39,7 @@ impl<D: Domain> Clone for Taken<D> {
     }
 }
 
-impl<D: Domain> PartialEq for Taken<D>
+impl<D: StateDomain> PartialEq for Taken<D>
 where
     D::Action: PartialEq,
 {
@@ -54,18 +54,18 @@ where
 /// There is no event queue. Re-entrancy is prevented by the borrow checker rather
 /// than by queueing (see [`Machine::dispatch`]), and a caller-owned queue can
 /// inspect each transition's [`Taken`].
-pub struct Machine<D: Domain> {
+pub struct Machine<D: StateDomain> {
     tag: D::Tag,
     states: &'static [State<D>],
     edges: &'static [Edge<D>],
     ignores: &'static [Ignore<D>],
 }
 
-impl<D: Domain> Machine<D> {
+impl<D: StateDomain> Machine<D> {
     /// Builds a machine and validates it.
     ///
-    /// Panics if a state listed by [`Domain::all_tags`], or targeted by an edge, is
-    /// missing from `states`. The second check matters when [`Domain::all_tags`] is
+    /// Panics if a state listed by [`StateDomain::all_tags`], or targeted by an edge, is
+    /// missing from `states`. The second check matters when [`StateDomain::all_tags`] is
     /// narrowed to a subset, which takes the excluded tags out of the first.
     ///
     /// In debug builds it also panics when [`render::coverage`] reports a defect,
@@ -84,7 +84,7 @@ impl<D: Domain> Machine<D> {
         for &tag in D::all_tags() {
             assert!(
                 states.iter().any(|s| s.tag == tag),
-                "tag {tag:?} is listed in Domain::all_tags but not in the state table",
+                "tag {tag:?} is listed in StateDomain::all_tags but not in the state table",
             );
         }
         for e in edges {
@@ -136,7 +136,7 @@ impl<D: Domain> Machine<D> {
     ///
     /// # Re-entrancy
     ///
-    /// [`Domain::perform`] has no way to reach `Machine`, and `self` is mutably
+    /// [`crate::Domain::perform`] has no way to reach `Machine`, and `self` is mutably
     /// borrowed for the duration of this call, so a nested dispatch does not
     /// compile. Drive follow-up events from the caller:
     ///
