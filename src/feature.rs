@@ -61,13 +61,22 @@ where
     );
 }
 
-/// Event kinds no feature handles. The [`crate::render::coverage`] `holes` of
-/// this layer.
-pub fn unhandled_kinds<D: Domain>(features: &[FeatureInfo<D>]) -> Vec<D::EventKind> {
+/// Event kinds nothing in the controller accounts for — the `holes` of a
+/// controller as a whole.
+///
+/// `elsewhere` carries the kinds handled outside the feature list, so that a
+/// controller that also runs a state machine is checked as one unit rather than
+/// reporting the machine's events as unhandled. Pass
+/// [`crate::render::handled_kinds`] for each machine, or `&[]` if there are none.
+pub fn unhandled_kinds<D: Domain>(
+    features: &[FeatureInfo<D>],
+    elsewhere: &[&[D::EventKind]],
+) -> Vec<D::EventKind> {
     D::all_kinds()
         .iter()
         .copied()
         .filter(|k| !features.iter().any(|f| f.handles.contains(k)))
+        .filter(|k| !elsewhere.iter().any(|ks| ks.contains(k)))
         .collect()
 }
 

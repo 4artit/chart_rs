@@ -57,7 +57,7 @@ pub trait HasKind {
 /// }
 /// ```
 ///
-/// The `Copy + Eq + Debug` that [`super::StateDomain::Tag`] requires are derived
+/// The `Copy + Eq + Debug` that [`super::MachineSpec::Tag`] requires are derived
 /// automatically. Outer attributes are forwarded to the enum.
 #[macro_export]
 macro_rules! tags {

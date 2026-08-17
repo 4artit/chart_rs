@@ -11,7 +11,7 @@ use std::cell::Cell;
 
 use super::feature::{self, Feature, FeatureInfo};
 use super::machine::{Cond, Cx, Edge, Expr, Goto, Ignore, Machine, Memo, OnUnknown, Source, State};
-use super::{Domain, Enumerable, HasKind, StateDomain, render};
+use super::{Domain, Enumerable, HasKind, MachineSpec, render};
 
 // ─────────────────────────────────────────── domain
 
@@ -82,7 +82,8 @@ impl Domain for RearCam {
     }
 }
 
-impl StateDomain for RearCam {
+impl MachineSpec for RearCam {
+    type Domain = RearCam;
     type Tag = Tag;
 }
 
@@ -574,7 +575,8 @@ impl Domain for PartialCam {
     fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
 }
 
-impl StateDomain for PartialCam {
+impl MachineSpec for PartialCam {
+    type Domain = PartialCam;
     type Tag = Tag;
 
     fn all_tags() -> &'static [Tag] {
@@ -628,7 +630,8 @@ impl Domain for Broken {
     fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
 }
 
-impl StateDomain for Broken {
+impl MachineSpec for Broken {
+    type Domain = Broken;
     type Tag = Tag;
 }
 
@@ -816,7 +819,24 @@ fn io_flowchart_keeps_features_and_actions_apart() {
 fn unhandled_kinds_reports_what_no_feature_takes() {
     // PowerChanged is in the event enum but no feature declares it.
     assert_eq!(
-        feature::unhandled_kinds(CAMERA_FEATURES),
+        feature::unhandled_kinds(CAMERA_FEATURES, &[]),
+        vec![Kind::PowerChanged]
+    );
+}
+
+/// A controller that mixes both layers is checked as one unit. An `Ignore` does
+/// not make a kind handled — the table only says the machine has no use for it.
+#[test]
+fn unhandled_kinds_counts_edges_but_not_ignores() {
+    let by_machine = render::handled_kinds::<RearCam>(EDGES);
+
+    assert!(by_machine.contains(&Kind::GearChanged));
+    assert!(
+        !by_machine.contains(&Kind::PowerChanged),
+        "PowerChanged only has an Ignore"
+    );
+    assert_eq!(
+        feature::unhandled_kinds(CAMERA_FEATURES, &[&by_machine]),
         vec![Kind::PowerChanged]
     );
 }

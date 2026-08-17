@@ -10,18 +10,18 @@ pub use edge::{Edge, Goto, Ignore, OnUnknown, Source};
 pub use node::{CondNode, Cx, Expr, Memo};
 pub use state::State;
 
-use crate::{HasKind, StateDomain, render};
+use crate::{ActionOf, Domain, EnvOf, EventOf, HasKind, KindOf, MachineSpec, render};
 
 /// The outcome of a transition, for tests and logs.
-pub struct Taken<D: StateDomain> {
+pub struct Taken<M: MachineSpec> {
     /// The id of the edge that was selected.
     pub edge: &'static str,
     /// The actions that ran, in `exit_actions` → `run` → `entry_actions` order.
-    pub actions: Vec<D::Action>,
+    pub actions: Vec<ActionOf<M>>,
 }
 
 // Derives would bound `D` itself; these bound only what is actually used.
-impl<D: StateDomain> std::fmt::Debug for Taken<D> {
+impl<M: MachineSpec> std::fmt::Debug for Taken<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Taken")
             .field("edge", &self.edge)
@@ -30,7 +30,7 @@ impl<D: StateDomain> std::fmt::Debug for Taken<D> {
     }
 }
 
-impl<D: StateDomain> Clone for Taken<D> {
+impl<M: MachineSpec> Clone for Taken<M> {
     fn clone(&self) -> Self {
         Self {
             edge: self.edge,
@@ -39,9 +39,9 @@ impl<D: StateDomain> Clone for Taken<D> {
     }
 }
 
-impl<D: StateDomain> PartialEq for Taken<D>
+impl<M: MachineSpec> PartialEq for Taken<M>
 where
-    D::Action: PartialEq,
+    ActionOf<M>: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         self.edge == other.edge && self.actions == other.actions
@@ -54,37 +54,37 @@ where
 /// There is no event queue. Re-entrancy is prevented by the borrow checker rather
 /// than by queueing (see [`Machine::dispatch`]), and a caller-owned queue can
 /// inspect each transition's [`Taken`].
-pub struct Machine<D: StateDomain> {
-    tag: D::Tag,
-    states: &'static [State<D>],
-    edges: &'static [Edge<D>],
-    ignores: &'static [Ignore<D>],
+pub struct Machine<M: MachineSpec> {
+    tag: M::Tag,
+    states: &'static [State<M>],
+    edges: &'static [Edge<M>],
+    ignores: &'static [Ignore<M>],
 }
 
-impl<D: StateDomain> Machine<D> {
+impl<M: MachineSpec> Machine<M> {
     /// Builds a machine and validates it.
     ///
-    /// Panics if a state listed by [`StateDomain::all_tags`], or targeted by an edge, is
-    /// missing from `states`. The second check matters when [`StateDomain::all_tags`] is
+    /// Panics if a state listed by [`MachineSpec::all_tags`], or targeted by an edge, is
+    /// missing from `states`. The second check matters when [`MachineSpec::all_tags`] is
     /// narrowed to a subset, which takes the excluded tags out of the first.
     ///
     /// In debug builds it also panics when [`render::coverage`] reports a defect,
     /// so table gaps surface at construction rather than at runtime. Release builds
     /// skip that check; call [`render::coverage`] from a test to keep it enforced.
     pub fn new(
-        initial: D::Tag,
-        states: &'static [State<D>],
-        edges: &'static [Edge<D>],
-        ignores: &'static [Ignore<D>],
+        initial: M::Tag,
+        states: &'static [State<M>],
+        edges: &'static [Edge<M>],
+        ignores: &'static [Ignore<M>],
     ) -> Self {
         assert!(
             states.iter().any(|s| s.tag == initial),
             "initial tag {initial:?} is missing from the state table",
         );
-        for &tag in D::all_tags() {
+        for &tag in M::all_tags() {
             assert!(
                 states.iter().any(|s| s.tag == tag),
-                "tag {tag:?} is listed in StateDomain::all_tags but not in the state table",
+                "tag {tag:?} is listed in MachineSpec::all_tags but not in the state table",
             );
         }
         for e in edges {
@@ -99,7 +99,7 @@ impl<D: StateDomain> Machine<D> {
 
         #[cfg(debug_assertions)]
         {
-            let cov = render::coverage::<D>(initial, edges, ignores);
+            let cov = render::coverage::<M>(initial, edges, ignores);
             assert!(cov.is_clean(), "[chart] table has holes: {cov:?}");
         }
 
@@ -111,13 +111,13 @@ impl<D: StateDomain> Machine<D> {
         }
     }
 
-    pub fn tag(&self) -> D::Tag {
+    pub fn tag(&self) -> M::Tag {
         self.tag
     }
 
     /// `new` checks the initial tag and every edge target, which are the only tags
     /// this is called with, so the miss arm cannot be reached.
-    fn state_of(&self, tag: D::Tag) -> &'static State<D> {
+    fn state_of(&self, tag: M::Tag) -> &'static State<M> {
         self.states
             .iter()
             .find(|s| s.tag == tag)
@@ -148,7 +148,7 @@ impl<D: StateDomain> Machine<D> {
     ///     }
     /// }
     /// ```
-    pub fn dispatch(&mut self, ev: &D::Event, world: &mut D::Env) -> Option<Taken<D>> {
+    pub fn dispatch(&mut self, ev: &EventOf<M>, world: &mut EnvOf<M>) -> Option<Taken<M>> {
         let kind = ev.kind();
 
         let Some(hit) = self.select(ev, world, kind) else {
@@ -163,7 +163,7 @@ impl<D: StateDomain> Machine<D> {
 
         let edge = &self.edges[hit];
         let id = edge.id;
-        let mut actions: Vec<D::Action> = Vec::new();
+        let mut actions: Vec<ActionOf<M>> = Vec::new();
 
         let target = match edge.goto {
             Goto::To(next) => Some(next),
@@ -190,7 +190,7 @@ impl<D: StateDomain> Machine<D> {
 
     /// Returns the index of the first matching edge. Declaration order is
     /// priority.
-    fn select(&self, ev: &D::Event, world: &D::Env, kind: D::EventKind) -> Option<usize> {
+    fn select(&self, ev: &EventOf<M>, world: &EnvOf<M>, kind: KindOf<M>) -> Option<usize> {
         let memo = Memo::new();
         let cx = Cx::new(ev, world, &memo);
 
@@ -207,13 +207,13 @@ impl<D: StateDomain> Machine<D> {
 
     /// Carries out `to_run`, appending each action to `done` as it goes.
     fn perform_all(
-        to_run: &[D::Action],
-        ev: &D::Event,
-        world: &mut D::Env,
-        done: &mut Vec<D::Action>,
+        to_run: &[ActionOf<M>],
+        ev: &EventOf<M>,
+        world: &mut EnvOf<M>,
+        done: &mut Vec<ActionOf<M>>,
     ) {
         for &a in to_run {
-            D::perform(a, ev, world);
+            <M::Domain as Domain>::perform(a, ev, world);
             done.push(a);
         }
     }

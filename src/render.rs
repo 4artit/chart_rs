@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 
 use crate::feature::FeatureInfo;
 use crate::machine::{Edge, Goto, Ignore, OnUnknown, State};
-use crate::{Domain, StateDomain};
+use crate::{Domain, MachineSpec};
 
 /// The result of checking every `(state × event kind)` combination.
 #[derive(Debug, Default)]
@@ -36,15 +36,15 @@ impl Coverage {
 }
 
 /// Checks the transition table.
-pub fn coverage<D: StateDomain>(
-    initial: D::Tag,
-    edges: &'static [Edge<D>],
-    ignores: &'static [Ignore<D>],
+pub fn coverage<M: MachineSpec>(
+    initial: M::Tag,
+    edges: &'static [Edge<M>],
+    ignores: &'static [Ignore<M>],
 ) -> Coverage {
     let mut out = Coverage::default();
 
-    for &tag in D::all_tags() {
-        for &kind in D::all_kinds() {
+    for &tag in M::all_tags() {
+        for &kind in <M::Domain as Domain>::all_kinds() {
             let hits: Vec<&'static str> = edges
                 .iter()
                 .filter(|e| e.when == kind && e.from.matches(tag))
@@ -65,7 +65,7 @@ pub fn coverage<D: StateDomain>(
     // Tag is only required to be Copy + Eq + Debug, not Hash, so reachability uses
     // a linear scan. State counts are small, and this avoids treating two states
     // with coincidentally equal Debug output as the same state.
-    let mut reached: Vec<D::Tag> = vec![initial];
+    let mut reached: Vec<M::Tag> = vec![initial];
     // Iterate to a fixed point; tables are small enough that this is fine.
     loop {
         let before = reached.len();
@@ -81,7 +81,7 @@ pub fn coverage<D: StateDomain>(
             break;
         }
     }
-    for &tag in D::all_tags() {
+    for &tag in M::all_tags() {
         if !reached.contains(&tag) {
             out.unreachable.push(format!("{tag:?}"));
         }
@@ -105,6 +105,26 @@ pub fn coverage<D: StateDomain>(
     out
 }
 
+/// The event kinds a transition table acts on.
+///
+/// Feed this to [`crate::feature::unhandled_kinds`] alongside the feature list so
+/// that a controller mixing both layers is checked as a whole.
+///
+/// [`Ignore`] does not count. It says this machine has no use for a kind, which
+/// is what [`coverage`] needs but the opposite of what a controller-wide check
+/// asks: whether *anything* acts on the event.
+pub fn handled_kinds<M: MachineSpec>(
+    edges: &'static [Edge<M>],
+) -> Vec<<M::Domain as Domain>::EventKind> {
+    let mut out: Vec<_> = Vec::new();
+    for e in edges {
+        if !out.contains(&e.when) {
+            out.push(e.when);
+        }
+    }
+    out
+}
+
 /// Builds a mermaid `stateDiagram-v2` string.
 ///
 /// [`Goto::Internal`] edges are omitted: drawing state-preserving transitions as
@@ -115,16 +135,16 @@ pub fn coverage<D: StateDomain>(
 ///
 /// The output converts to PlantUML almost line for line; see
 /// `scripts/mermaid_to_plantuml.sh`.
-pub fn to_mermaid<D: StateDomain>(
-    initial: D::Tag,
-    edges: &'static [Edge<D>],
-    states: &'static [State<D>],
+pub fn to_mermaid<M: MachineSpec>(
+    initial: M::Tag,
+    edges: &'static [Edge<M>],
+    states: &'static [State<M>],
 ) -> String {
     let mut s = String::from("stateDiagram-v2\n");
     let _ = writeln!(s, "    [*] --> {initial:?}");
 
     // Declaration order, not the order the nodes were passed in.
-    for &tag in D::all_tags() {
+    for &tag in M::all_tags() {
         let Some(st) = states.iter().find(|s| s.tag == tag) else {
             continue;
         };
@@ -169,7 +189,7 @@ pub fn to_mermaid<D: StateDomain>(
 }
 
 /// Tabulates the transitions that do not change state.
-pub fn internal_table<D: StateDomain>(edges: &'static [Edge<D>]) -> String {
+pub fn internal_table<M: MachineSpec>(edges: &'static [Edge<M>]) -> String {
     let mut s =
         String::from("| state | event | guard | actions | edge id |\n|---|---|---|---|---|\n");
     for e in edges {
@@ -192,7 +212,7 @@ pub fn internal_table<D: StateDomain>(edges: &'static [Edge<D>]) -> String {
 }
 
 /// Tabulates the deliberately unhandled combinations and their reasons.
-pub fn ignore_table<D: StateDomain>(ignores: &'static [Ignore<D>]) -> String {
+pub fn ignore_table<M: MachineSpec>(ignores: &'static [Ignore<M>]) -> String {
     let mut s = String::from("| state | event | reason |\n|---|---|---|\n");
     for i in ignores {
         for from in i.from.expand() {

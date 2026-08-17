@@ -18,9 +18,9 @@
 | `feature` | 동작이 과거에 의존하지 않음 | 기능마다 받는 이벤트와 내는 액션 |
 | `machine` | 같은 입력이 상태에 따라 다른 결과를 냄 | 전이 표 (`Edge` 배열) |
 
-둘 다 `Domain`(컨트롤러가 쓸 타입 묶음)을 공유한다. 그래서 어떤 기능이 나중에
-상태를 갖게 되면 선언은 그대로 두고 `StateDomain`만 추가해 `machine`으로 옮기면
-된다. 대부분의 기능은 `feature`로 충분하다.
+둘 다 `Domain`(컨트롤러가 쓸 타입 묶음)을 공유한다. 그래서 한 컨트롤러 안에서
+섞어 쓸 수 있고, 어떤 기능이 나중에 상태를 갖게 되면 선언은 그대로 두고
+`MachineSpec` 두 줄만 추가하면 된다. 대부분의 기능은 `feature`로 충분하다.
 
 ## 설치
 
@@ -36,7 +36,7 @@ chart = { path = "../chart" }
 | 요소 | 내부 상태 | 역할 |
 |---|---|---|
 | `Domain` | — | 컨트롤러가 쓸 타입 묶음 (Event / Action / Env) |
-| `StateDomain` | — | 상태가 있는 컨트롤러가 추가로 구현 (Tag) |
+| `MachineSpec` | — | 상태 기계 하나의 모양 (어느 Domain의, 어떤 Tag) |
 | `feature::Feature` | 기능별 | 한 기능이 받는 이벤트와 내는 액션 |
 | `machine::CondNode` | 없음 (`&self`) | 전이 조건 판정 |
 | `machine::State` | 없음 (정적) | 한 상태의 태그와 진입/이탈 액션 |
@@ -49,7 +49,7 @@ chart = { path = "../chart" }
 
 ```rust
 use chart::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
-use chart::{Domain, StateDomain};
+use chart::{Domain, MachineSpec};
 
 // 1. Domain — 컨트롤러가 쓸 타입들을 한 곳에 묶는다.
 //    tags!/events! 가 enum과 커버리지용 전수 목록을 함께 만든다.
@@ -84,8 +84,9 @@ impl Domain for Light {
     }
 }
 
-// 상태가 있으므로 StateDomain 도 구현한다.
-impl StateDomain for Light {
+// 상태 기계가 하나뿐이면 도메인 타입이 그대로 스펙 역할을 한다.
+impl MachineSpec for Light {
+    type Domain = Light;
     type Tag = Tag;
 }
 
@@ -155,8 +156,10 @@ pub trait Domain: Sized + 'static {
     fn all_kinds() -> &'static [Self::EventKind] { ... }
 }
 
-// 상태가 있는 컨트롤러만 추가로 구현한다.
-pub trait StateDomain: Domain {
+// 상태 기계 하나의 모양. 머신이 여럿이면 각자 하나씩 두고 Domain 은 공유한다 —
+// 어휘도 guard 도 perform 도 그대로 쓴다.
+pub trait MachineSpec {
+    type Domain: Domain;
     type Tag: Enumerable;                        // 상태 식별자
     fn all_tags() -> &'static [Self::Tag] { ... }
 }
@@ -396,7 +399,7 @@ scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > door_lock.pn
 
 ```
 src/
-  lib.rs          // Domain, StateDomain — 라이브러리 진입점
+  lib.rs          // Domain, MachineSpec — 라이브러리 진입점
   enums.rs        // Enumerable, HasKind, tags!/events! 매크로
   feature.rs      // Feature, FeatureInfo, dispatch — 상태 없는 층
   machine.rs      // Machine, Taken — 상태 있는 층

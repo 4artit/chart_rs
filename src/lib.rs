@@ -41,7 +41,7 @@ use std::fmt::Debug;
 ///
 /// Bundling them into a single trait keeps the whole framework generic over one
 /// type parameter `D` instead of four. A controller that also has states
-/// implements [`StateDomain`] on top of this.
+/// declares a [`MachineSpec`] naming this domain.
 pub trait Domain: Sized + 'static {
     /// Event body, including payload.
     ///
@@ -92,11 +92,18 @@ pub trait Domain: Sized + 'static {
     }
 }
 
-/// A [`Domain`] whose controller also has states, for the [`machine`] layer.
+/// One state machine's shape: the [`Domain`] it belongs to and what its states
+/// are.
 ///
-/// Split from `Domain` so that a controller with no states — one built from
-/// [`feature::Feature`] alone — does not have to invent a tag enum.
-pub trait StateDomain: Domain {
+/// Kept apart from `Domain` for two reasons. A controller with no states — one
+/// built from [`feature::Feature`] alone — never has to invent a tag enum. And a
+/// controller that needs *several* machines declares one of these per machine
+/// while they all share the same events, actions, guards and
+/// [`Domain::perform`].
+pub trait MachineSpec: Sized + 'static {
+    /// The vocabulary this machine works in.
+    type Domain: Domain;
+
     /// State identifier. Payloads live in [`Domain::Event`]; only the tag is here.
     ///
     /// Declaring it with [`tags!`] also generates the [`Enumerable`] impl.
@@ -109,3 +116,12 @@ pub trait StateDomain: Domain {
         <Self::Tag as Enumerable>::ALL
     }
 }
+
+/// The event type of `M`'s domain.
+pub type EventOf<M> = <<M as MachineSpec>::Domain as Domain>::Event;
+/// The event kind type of `M`'s domain.
+pub type KindOf<M> = <<M as MachineSpec>::Domain as Domain>::EventKind;
+/// The action type of `M`'s domain.
+pub type ActionOf<M> = <<M as MachineSpec>::Domain as Domain>::Action;
+/// The world type of `M`'s domain.
+pub type EnvOf<M> = <<M as MachineSpec>::Domain as Domain>::Env;
