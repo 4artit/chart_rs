@@ -1,5 +1,7 @@
 //! Example use of the `chart` crate: a door lock opened by a four-digit code.
 //!
+//!     cargo run --example door_lock
+//!
 //! Four states (Locked/Unlocked/Alarm/Maintenance) and seven edges.
 //!
 //! # Where a state-dependent value belongs
@@ -257,8 +259,8 @@ fn main() {
     let diagram = render::to_mermaid::<Door>(Tag::Locked, EDGES, STATES);
     let md = format!("# Door lock FSM\n\n```mermaid\n{diagram}```\n");
     std::fs::create_dir_all("example").expect("failed to create example dir");
-    std::fs::write("example/door_lock.md", &md).expect("failed to write example/door_lock.md");
-    println!("\nmermaid diagram written to example/door_lock.md");
+    std::fs::write("examples/door_lock.md", &md).expect("failed to write examples/door_lock.md");
+    println!("\nmermaid diagram written to examples/door_lock.md");
 
     let coverage = render::coverage::<Door>(Tag::Locked, EDGES, IGNORES);
     println!("coverage clean: {}", coverage.is_clean());

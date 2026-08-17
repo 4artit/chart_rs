@@ -6,7 +6,7 @@
 # reads stdin when no file is given.
 #
 #   scripts/mermaid_to_plantuml.sh example/door_lock.md > example/door_lock.puml
-#   cargo run && scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > door_lock.png
+#   cargo run --example door_lock && scripts/mermaid_to_plantuml.sh example/door_lock.md | plantuml -p > door_lock.png
 #
 # The two syntaxes line up almost exactly: `[*] --> X` and `A --> B` carry over
 # unchanged, so only the header, the label separator and the line break differ.
