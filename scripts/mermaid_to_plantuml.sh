@@ -43,6 +43,17 @@ awk '
           sub(/^[[:space:]]+/, "", s)             # PlantUML uses no indentation
           if (s == "" || s == "stateDiagram-v2" || s ~ /^```/) continue
 
+          # PlantUML prints the state name above its description, so drop the
+          # copy that mermaid needs in the label.
+          if (s ~ /^[A-Za-z0-9_]+ : /) {
+              p = index(s, " : ")
+              name = substr(s, 1, p - 1)
+              desc = substr(s, p + 3)
+              if (index(desc, name "<br/>") == 1) {
+                  s = name " : " substr(desc, length(name) + 6)
+              }
+          }
+
           gsub(/<br\/>/, "\\n", s)                # line break inside a label
           sub(/ *: /, " : ", s)                   # PlantUML label separator
           print s

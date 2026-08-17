@@ -91,8 +91,8 @@ crate::cond_node!(RearCam, SpeedBelowLimit, |cx| match cx.world.speed {
 
 crate::state!(RearCam, Off, tag: Tag::Off);
 crate::state!(RearCam, Showing, tag: Tag::Showing,
-              on_enter: [Action::ShowCamera],
-              on_exit:  [Action::HideCamera]);
+              entry: [Action::ShowCamera],
+              exit:  [Action::HideCamera]);
 
 // ─────────────────────────────────────────── table
 
@@ -274,7 +274,7 @@ fn mermaid_matches_golden() {
     let expected = "\
 stateDiagram-v2
     [*] --> Off
-    Showing : entry / ShowCamera<br/>exit / HideCamera
+    Showing : Showing<br/>entry / ShowCamera<br/>exit / HideCamera
     Off --> Showing: GearChanged<br/>[GearIsReverse && SpeedBelowLimit]
     Showing --> Off: GearChanged<br/>[!GearIsReverse]
     Showing --> Off: SpeedChanged<br/>[!SpeedBelowLimit]<br/>unknown=Allow

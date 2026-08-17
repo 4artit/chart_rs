@@ -44,8 +44,8 @@ pub trait StateNode<D: Domain>: Any {
 /// ```ignore
 /// state!(RearCam, Off,     tag: Tag::Off);
 /// state!(RearCam, Showing, tag: Tag::Showing,
-///        on_enter: [Action::ShowCamera],
-///        on_exit:  [Action::HideCamera]);
+///        entry: [Action::ShowCamera],
+///        exit:  [Action::HideCamera]);
 /// ```
 ///
 /// The lists become [`StateNode::entry_actions`] and [`StateNode::exit_actions`];
@@ -54,16 +54,16 @@ pub trait StateNode<D: Domain>: Any {
 #[macro_export]
 macro_rules! state {
     ($dom:ty, $name:ident, tag: $tag:expr) => {
-        $crate::state!($dom, $name, tag: $tag, on_enter: [], on_exit: []);
+        $crate::state!($dom, $name, tag: $tag, entry: [], exit: []);
     };
-    ($dom:ty, $name:ident, tag: $tag:expr, on_enter: [$($enter:expr),* $(,)?]) => {
-        $crate::state!($dom, $name, tag: $tag, on_enter: [$($enter),*], on_exit: []);
+    ($dom:ty, $name:ident, tag: $tag:expr, entry: [$($enter:expr),* $(,)?]) => {
+        $crate::state!($dom, $name, tag: $tag, entry: [$($enter),*], exit: []);
     };
-    ($dom:ty, $name:ident, tag: $tag:expr, on_exit: [$($exit:expr),* $(,)?]) => {
-        $crate::state!($dom, $name, tag: $tag, on_enter: [], on_exit: [$($exit),*]);
+    ($dom:ty, $name:ident, tag: $tag:expr, exit: [$($exit:expr),* $(,)?]) => {
+        $crate::state!($dom, $name, tag: $tag, entry: [], exit: [$($exit),*]);
     };
     ($dom:ty, $name:ident, tag: $tag:expr,
-     on_enter: [$($enter:expr),* $(,)?], on_exit: [$($exit:expr),* $(,)?]) => {
+     entry: [$($enter:expr),* $(,)?], exit: [$($exit:expr),* $(,)?]) => {
         #[derive(Default)]
         pub struct $name;
 

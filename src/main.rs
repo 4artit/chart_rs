@@ -144,10 +144,10 @@ impl StateNode<Door> for Unlocked {
 
 // States without variables need only the macro.
 fsm::state!(Door, Locked, tag: Tag::Locked,
-            on_enter: [Action::Lock, Action::ResetAttempts]);
-fsm::state!(Door, Alarm, tag: Tag::Alarm, on_enter: [Action::SoundAlarm]);
+            entry: [Action::Lock, Action::ResetAttempts]);
+fsm::state!(Door, Alarm, tag: Tag::Alarm, entry: [Action::SoundAlarm]);
 fsm::state!(Door, Maintenance, tag: Tag::Maintenance,
-            on_enter: [Action::MaintenanceOn], on_exit: [Action::MaintenanceOff]);
+            entry: [Action::MaintenanceOn], exit: [Action::MaintenanceOff]);
 
 static EDGES: &[Edge<Door>] = &[
     Edge {

@@ -132,7 +132,9 @@ pub fn to_mermaid<D: Domain>(
             lines.push(format!("exit / {}", join_actions(node.exit_actions())));
         }
         if !lines.is_empty() {
-            let _ = writeln!(s, "    {tag:?} : {}", lines.join("<br/>"));
+            // A mermaid description replaces the node's label, so it has to repeat
+            // the state name.
+            let _ = writeln!(s, "    {tag:?} : {tag:?}<br/>{}", lines.join("<br/>"));
         }
     }
 
