@@ -12,11 +12,11 @@ pub use state::State;
 
 use crate::{ActionOf, Domain, EnvOf, EventOf, HasKind, KindOf, MachineSpec, render};
 
-/// The outcome of a transition, for tests and logs.
+/// The outcome of one [`Machine::dispatch`] call, for tests and logs.
 pub struct Taken<M: MachineSpec> {
     /// The id of the edge that was selected.
     pub edge: &'static str,
-    /// The actions that ran, in `exit_actions` → `run` → `entry_actions` order.
+    /// The actions that ran, in `exit` → `run` → `entry` order.
     pub actions: Vec<ActionOf<M>>,
 }
 
@@ -48,12 +48,8 @@ where
     }
 }
 
-/// The executor. Its only mutable state is the current tag; everything else is
-/// the static tables it was built from.
-///
-/// There is no event queue. Re-entrancy is prevented by the borrow checker rather
-/// than by queueing (see [`Machine::dispatch`]), and a caller-owned queue can
-/// inspect each transition's [`Taken`].
+/// Runs a transition table: holds the current state and dispatches events
+/// against it.
 pub struct Machine<M: MachineSpec> {
     tag: M::Tag,
     states: &'static [State<M>],
@@ -62,15 +58,19 @@ pub struct Machine<M: MachineSpec> {
 }
 
 impl<M: MachineSpec> Machine<M> {
-    /// Builds a machine and validates it.
+    /// Builds a machine and validates its tables.
     ///
-    /// Panics if a state listed by [`MachineSpec::all_tags`], or targeted by an edge, is
-    /// missing from `states`. The second check matters when [`MachineSpec::all_tags`] is
-    /// narrowed to a subset, which takes the excluded tags out of the first.
+    /// - `initial`: the starting state tag.
+    /// - `states`, `edges`, `ignores`: the transition table, as static slices.
     ///
-    /// In debug builds it also panics when [`render::coverage`] reports a defect,
-    /// so table gaps surface at construction rather than at runtime. Release builds
-    /// skip that check; call [`render::coverage`] from a test to keep it enforced.
+    /// Returns the constructed machine.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `initial`, or any tag [`MachineSpec::all_tags`] lists, or any
+    /// edge target, is missing from `states`. In debug builds, also panics if
+    /// [`render::coverage`] reports a defect (release builds skip that check;
+    /// call [`render::coverage`] from a test to keep it enforced there).
     pub fn new(
         initial: M::Tag,
         states: &'static [State<M>],
@@ -111,12 +111,13 @@ impl<M: MachineSpec> Machine<M> {
         }
     }
 
+    /// Returns the current state tag.
     pub fn tag(&self) -> M::Tag {
         self.tag
     }
 
-    /// `new` checks the initial tag and every edge target, which are the only tags
-    /// this is called with, so the miss arm cannot be reached.
+    /// Looks up the state table entry for `tag`. `new` guarantees every tag
+    /// this is called with is present, so the miss arm is unreachable.
     fn state_of(&self, tag: M::Tag) -> &'static State<M> {
         self.states
             .iter()
@@ -124,30 +125,24 @@ impl<M: MachineSpec> Machine<M> {
             .unwrap_or_else(|| unreachable!("no state table entry for {tag:?}"))
     }
 
-    /// Handles one event. Returns `None` when no edge is selected.
+    /// Matches `ev` against the table from the current state and runs the
+    /// selected transition.
     ///
-    /// Order of effects: [`State::exit`] of the current state → tag change → `run`
-    /// → [`State::entry`] of the target. For [`Goto::Internal`] only `run` runs.
-    /// Each action is carried out as it is reached, so an exit action sees the
-    /// world before the transition's later effects.
+    /// - `ev`: the event to handle.
+    /// - `world`: the outside world, mutated by whatever actions run.
     ///
-    /// The initial state's entry effects never run, as no event triggered them.
-    /// Define an `Init` event and dispatch it if the initial state needs them.
+    /// Returns the [`Taken`] transition, or `None` if no edge matched (a
+    /// warning is logged unless the combination is covered by an [`Ignore`]).
     ///
-    /// # Re-entrancy
+    /// Effects run in this order: the current state's [`State::exit`] → the
+    /// tag changes → `run` → the target state's [`State::entry`]. For
+    /// [`Goto::Internal`] only `run` executes. The initial state's entry
+    /// actions never run on construction; dispatch an explicit init event if
+    /// they're needed.
     ///
-    /// [`crate::Domain::perform`] has no way to reach `Machine`, and `self` is mutably
-    /// borrowed for the duration of this call, so a nested dispatch does not
-    /// compile. Drive follow-up events from the caller:
-    ///
-    /// ```ignore
-    /// let mut pending = VecDeque::from([first_event]);
-    /// while let Some(ev) = pending.pop_front() {
-    ///     if let Some(taken) = m.dispatch(&ev, &mut world) {
-    ///         // decide follow-ups from taken.edge / taken.actions
-    ///     }
-    /// }
-    /// ```
+    /// Not re-entrant: `self` is mutably borrowed for the call, so a nested
+    /// dispatch won't compile. Queue follow-up events in the caller instead —
+    /// see [`Taken`].
     pub fn dispatch(&mut self, ev: &EventOf<M>, world: &mut EnvOf<M>) -> Option<Taken<M>> {
         let kind = ev.kind();
 
@@ -188,8 +183,8 @@ impl<M: MachineSpec> Machine<M> {
         Some(Taken { edge: id, actions })
     }
 
-    /// Returns the index of the first matching edge. Declaration order is
-    /// priority.
+    /// Index of the first edge matching `kind` from the current state.
+    /// Declaration order is priority.
     fn select(&self, ev: &EventOf<M>, world: &EnvOf<M>, kind: KindOf<M>) -> Option<usize> {
         let memo = Memo::new();
         let cx = Cx::new(ev, world, &memo);
@@ -205,7 +200,7 @@ impl<M: MachineSpec> Machine<M> {
         })
     }
 
-    /// Carries out `to_run`, appending each action to `done` as it goes.
+    /// Runs each action in `to_run` in order, appending it to `done`.
     fn perform_all(
         to_run: &[ActionOf<M>],
         ev: &EventOf<M>,

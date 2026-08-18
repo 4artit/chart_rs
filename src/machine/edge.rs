@@ -4,16 +4,17 @@ use crate::{ActionOf, KindOf, MachineSpec};
 
 use super::Expr;
 
-/// Which states an edge departs from. This is a set of states, not a guard.
+/// The set of states an edge departs from — a state list, not a guard
+/// condition.
 pub enum Source<M: MachineSpec> {
     These(&'static [M::Tag]),
-    /// Every state except the listed ones. Gives the DRY benefit of hierarchical
-    /// state machines without the hierarchy.
+    /// Every state except the listed ones.
     AnyExcept(&'static [M::Tag]),
     Any,
 }
 
 impl<M: MachineSpec> Source<M> {
+    /// Reports whether `tag` is in this source's state set.
     pub fn matches(&self, tag: M::Tag) -> bool {
         match self {
             Self::These(list) => list.contains(&tag),
@@ -22,8 +23,8 @@ impl<M: MachineSpec> Source<M> {
         }
     }
 
-    /// The concrete states this matches, for diagrams and coverage. Wildcards are
-    /// expanded here.
+    /// Expands this source into its concrete list of states, for diagrams and
+    /// coverage checking.
     pub fn expand(&self) -> Vec<M::Tag> {
         M::all_tags()
             .iter()
@@ -68,15 +69,17 @@ pub struct Edge<M: MachineSpec> {
 
 /// A `(state, event kind)` combination that is deliberately not handled.
 ///
-/// Declaring these is what lets coverage checking tell a gap apart from an
+/// Declaring these lets coverage checking tell a gap apart from an
 /// intentional omission, so `why` is required.
 pub struct Ignore<M: MachineSpec> {
     pub from: Source<M>,
     pub when: &'static [KindOf<M>],
+    /// Why this combination is intentionally unhandled.
     pub why: &'static str,
 }
 
 impl<M: MachineSpec> Ignore<M> {
+    /// Reports whether this `Ignore` covers `(tag, kind)`.
     pub fn matches(&self, tag: M::Tag, kind: KindOf<M>) -> bool {
         self.from.matches(tag) && self.when.contains(&kind)
     }

@@ -35,7 +35,13 @@ impl Coverage {
     }
 }
 
-/// Checks the transition table.
+/// Checks a transition table for gaps, unreachable states, and guard name
+/// collisions.
+///
+/// - `initial`: the machine's starting state.
+/// - `edges`, `ignores`: the transition table to check.
+///
+/// Returns a [`Coverage`] report.
 pub fn coverage<M: MachineSpec>(
     initial: M::Tag,
     edges: &'static [Edge<M>],
@@ -105,14 +111,13 @@ pub fn coverage<M: MachineSpec>(
     out
 }
 
-/// The event kinds a transition table acts on.
+/// The event kinds a transition table acts on. `Ignore`d kinds do not count —
+/// pass this to [`crate::feature::unhandled_kinds`] alongside a feature list so
+/// a controller mixing both layers is checked as one unit.
 ///
-/// Feed this to [`crate::feature::unhandled_kinds`] alongside the feature list so
-/// that a controller mixing both layers is checked as a whole.
+/// - `edges`: the transition table to scan.
 ///
-/// [`Ignore`] does not count. It says this machine has no use for a kind, which
-/// is what [`coverage`] needs but the opposite of what a controller-wide check
-/// asks: whether *anything* acts on the event.
+/// Returns the event kinds matched by at least one edge.
 pub fn handled_kinds<M: MachineSpec>(
     edges: &'static [Edge<M>],
 ) -> Vec<<M::Domain as Domain>::EventKind> {
@@ -125,16 +130,15 @@ pub fn handled_kinds<M: MachineSpec>(
     out
 }
 
-/// Builds a mermaid `stateDiagram-v2` string.
+/// Builds a mermaid `stateDiagram-v2` diagram from a transition table.
 ///
-/// [`Goto::Internal`] edges are omitted: drawing state-preserving transitions as
-/// self-loops makes the diagram unreadable. Use [`internal_table`] for those.
+/// - `initial`: the machine's starting state.
+/// - `edges`: the transitions to draw. [`Goto::Internal`] edges are omitted
+///   (they'd draw as unreadable self-loops) — use [`internal_table`] for those.
+/// - `states`: entry/exit actions, drawn as state descriptions.
 ///
-/// Entry and exit actions are read from [`State::entry`] and [`State::exit`] and
-/// drawn as state descriptions.
-///
-/// The output converts to PlantUML almost line for line; see
-/// `scripts/mermaid_to_plantuml.sh`.
+/// Returns the diagram source. Converts to PlantUML almost line for line;
+/// see `scripts/mermaid_to_plantuml.sh`.
 pub fn to_mermaid<M: MachineSpec>(
     initial: M::Tag,
     edges: &'static [Edge<M>],
@@ -188,7 +192,11 @@ pub fn to_mermaid<M: MachineSpec>(
     s
 }
 
-/// Tabulates the transitions that do not change state.
+/// Tabulates the transitions that do not change state ([`Goto::Internal`]).
+///
+/// - `edges`: the transition table to scan.
+///
+/// Returns a markdown table.
 pub fn internal_table<M: MachineSpec>(edges: &'static [Edge<M>]) -> String {
     let mut s =
         String::from("| state | event | guard | actions | edge id |\n|---|---|---|---|---|\n");
@@ -212,6 +220,10 @@ pub fn internal_table<M: MachineSpec>(edges: &'static [Edge<M>]) -> String {
 }
 
 /// Tabulates the deliberately unhandled combinations and their reasons.
+///
+/// - `ignores`: the ignore list to render.
+///
+/// Returns a markdown table.
 pub fn ignore_table<M: MachineSpec>(ignores: &'static [Ignore<M>]) -> String {
     let mut s = String::from("| state | event | reason |\n|---|---|---|\n");
     for i in ignores {
@@ -235,6 +247,10 @@ fn join_actions<A: std::fmt::Debug>(actions: &[A]) -> String {
 // ─────────────────────────────────────────── feature layer
 
 /// Tabulates what each feature reacts to and emits.
+///
+/// - `features`: the feature list to render.
+///
+/// Returns a markdown table.
 pub fn io_table<D: Domain>(features: &[FeatureInfo<D>]) -> String {
     let mut s = String::from("| feature | handles | emits |\n|---|---|---|\n");
     for f in features {
@@ -249,11 +265,13 @@ pub fn io_table<D: Domain>(features: &[FeatureInfo<D>]) -> String {
     s
 }
 
-/// Draws events → features → actions.
+/// Draws a mermaid flowchart of events → features → actions.
 ///
-/// Node ids carry a prefix because a feature and the action it emits routinely
-/// share a name; without one, mermaid merges them into a single node with a
-/// self-loop.
+/// - `features`: the feature list to render.
+///
+/// Returns the diagram source. Node ids carry a prefix because a feature and
+/// the action it emits routinely share a name, which would otherwise merge
+/// them into one self-looping node.
 pub fn io_flowchart<D: Domain>(features: &[FeatureInfo<D>]) -> String {
     let mut s = String::from("flowchart LR\n");
     for f in features {

@@ -9,21 +9,23 @@ use super::Cond;
 
 /// One transition guard.
 ///
-/// A guard **cannot own state**: `eval` takes `&self` and nodes are held as
-/// `&'static`, so every input arrives through [`Cx`]. That rule is what makes the
-/// [`Memo`] cache sound and lets a node be tested as a pure function.
+/// Nodes are stateless: `eval` takes `&self`, and every input arrives
+/// through [`Cx`]. That keeps a node testable as a pure function and makes
+/// the [`Memo`] cache safe to share across edges.
 pub trait CondNode<D: Domain>: Sync + Any {
-    /// The name shown in diagrams and logs. It must be **unique within a
-    /// machine**, since it is the [`Memo`] key.
-    ///
-    /// [`crate::render::coverage`] verifies uniqueness.
+    /// The name shown in diagrams and logs, and the [`Memo`] cache key.
+    /// **Must be unique within a machine** — [`crate::render::coverage`]
+    /// verifies this.
     fn name(&self) -> &'static str;
 
-    /// Evaluates the guard. Must not modify the world.
+    /// Evaluates the guard against `cx`. Must not modify the world.
+    ///
+    /// Returns the guard's result.
     fn eval(&self, cx: &Cx<'_, D>) -> Cond;
 }
 
-/// The inputs handed to a guard node.
+/// The inputs handed to a guard node: the event, the world, and the
+/// per-dispatch [`Memo`] cache.
 pub struct Cx<'a, D: Domain> {
     /// The event, including payload.
     pub event: &'a D::Event,
@@ -33,26 +35,26 @@ pub struct Cx<'a, D: Domain> {
 }
 
 impl<'a, D: Domain> Cx<'a, D> {
+    /// Builds a context from an event, a world reference, and a memo cache.
     pub fn new(event: &'a D::Event, world: &'a D::Env, memo: &'a Memo) -> Self {
         Self { event, world, memo }
     }
 }
 
-/// Guard evaluation cache, valid for the duration of one dispatch.
-///
-/// When several edges share a `(state, event kind)` the same node is evaluated
-/// more than once. Without the cache a single event could observe two different
-/// worlds.
+/// Guard evaluation cache, valid for one [`crate::machine::Machine::dispatch`]
+/// call, so a node shared by several edges is evaluated only once per event.
 #[derive(Default)]
 pub struct Memo {
     cache: RefCell<Vec<(&'static str, Cond)>>,
 }
 
 impl Memo {
+    /// Builds an empty cache.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns the cached result for `name`, if any.
     fn lookup(&self, name: &'static str) -> Option<Cond> {
         self.cache
             .borrow()
@@ -61,6 +63,7 @@ impl Memo {
             .map(|(_, c)| *c)
     }
 
+    /// Caches `cond` under `name`.
     fn store(&self, name: &'static str, cond: Cond) {
         self.cache.borrow_mut().push((name, cond));
     }
@@ -77,8 +80,9 @@ pub enum Expr<D: Domain> {
 }
 
 impl<D: Domain> Expr<D> {
-    /// Evaluates the tree. `And` and `Or` **short-circuit**, so no unnecessary
-    /// lookups are performed.
+    /// Evaluates the tree against `cx`. `And`/`Or` short-circuit.
+    ///
+    /// Returns the combined guard result.
     pub fn eval(&self, cx: &Cx<'_, D>) -> Cond {
         match self {
             Self::Always => Cond::True,
@@ -103,9 +107,10 @@ impl<D: Domain> Expr<D> {
         }
     }
 
-    /// Renders the expression for diagrams, e.g. `A && !B`.
+    /// Renders the expression for diagrams, e.g. `A && !B`. `Not` is
+    /// parenthesised so `!(A && B)` doesn't read as `!A && B`.
     ///
-    /// `Not` is parenthesised so that `!(A && B)` does not read as `!A && B`.
+    /// Returns the rendered guard string, or empty for [`Expr::Always`].
     pub fn render(&self) -> String {
         match self {
             Self::Always => String::new(),
@@ -119,8 +124,10 @@ impl<D: Domain> Expr<D> {
         }
     }
 
-    /// Collects `(name, type)` for every node this expression references, for the
-    /// name-uniqueness check.
+    /// Collects `(name, type id)` for every node this expression references.
+    ///
+    /// - `out`: pairs are appended here, for [`crate::render::coverage`]'s
+    ///   name-uniqueness check.
     pub fn node_ids(&self, out: &mut Vec<(&'static str, std::any::TypeId)>) {
         match self {
             Self::Always => {}

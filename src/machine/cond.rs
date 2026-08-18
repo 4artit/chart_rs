@@ -1,10 +1,8 @@
-//! Three-valued logic. `Unknown` means "a lookup failed, so this is undecidable".
-//!
-//! Collapsing that case into `bool` hides the failure policy inside the guard.
-//! Keeping it separate moves the policy out to [`crate::machine::OnUnknown`], where the
-//! diagram can show it.
+//! Three-valued logic for guards. `Unknown` means undecidable (e.g. a failed
+//! lookup), kept apart from `False` so the fallback policy is explicit in
+//! [`crate::machine::OnUnknown`] instead of hidden inside a guard.
 
-/// The result of evaluating a guard.
+/// The result of evaluating one guard.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Cond {
     True,
@@ -14,14 +12,15 @@ pub enum Cond {
 }
 
 impl From<bool> for Cond {
+    /// Maps `true`/`false` to [`Cond::True`]/[`Cond::False`]. There is no
+    /// `bool` counterpart for [`Cond::Unknown`] — construct it directly.
     fn from(b: bool) -> Self {
         if b { Self::True } else { Self::False }
     }
 }
 
 impl Cond {
-    /// Kleene AND. A single `False` wins, which is what makes combinations
-    /// fail-safe.
+    /// Kleene AND: a single `False` wins over any `Unknown`.
     pub const fn and(self, other: Self) -> Self {
         match (self, other) {
             (Self::False, _) | (_, Self::False) => Self::False,
@@ -30,7 +29,7 @@ impl Cond {
         }
     }
 
-    /// Kleene OR.
+    /// Kleene OR: a single `True` wins over any `Unknown`.
     pub const fn or(self, other: Self) -> Self {
         match (self, other) {
             (Self::True, _) | (_, Self::True) => Self::True,
@@ -39,7 +38,7 @@ impl Cond {
         }
     }
 
-    /// Kleene NOT. The negation of `Unknown` is `Unknown`.
+    /// Kleene NOT: `Unknown` negates to `Unknown`.
     pub const fn not(self) -> Self {
         match self {
             Self::True => Self::False,

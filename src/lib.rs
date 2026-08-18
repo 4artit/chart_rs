@@ -37,81 +37,53 @@ pub use enums::{Enumerable, HasKind};
 
 use std::fmt::Debug;
 
-/// The set of types one controller works with.
-///
-/// Bundling them into a single trait keeps the whole framework generic over one
-/// type parameter `D` instead of four. A controller that also has states
-/// declares a [`MachineSpec`] naming this domain.
+/// The set of types one controller works with: events, actions, and the
+/// outside world. Every other item in this crate is generic over `D: Domain`.
 pub trait Domain: Sized + 'static {
-    /// Event body, including payload.
-    ///
-    /// Declaring it with [`events!`] also generates the [`HasKind`] impl.
-    ///
-    /// `Debug` is required so that the dispatch log carries the payload. An action
-    /// that reads a runtime value out of `ev` is named but not valued in
-    /// [`machine::Taken::actions`], and the log line is what closes that gap.
+    /// Event body, including payload. [`events!`] generates this together with
+    /// its [`HasKind`] impl.
     type Event: HasKind<Kind = Self::EventKind> + Debug;
 
-    /// Event kind: a payload-free tag. Edges match on this.
-    ///
-    /// Declaring it with [`events!`] also generates the [`Enumerable`] impl.
+    /// Payload-free event tag that edges match on. [`events!`] generates this
+    /// together with its [`Enumerable`] impl.
     type EventKind: Enumerable;
 
-    /// An effect. Must be plain data so its name appears in logs and diagrams.
+    /// An effect a controller can produce.
     type Action: Copy + Debug + 'static;
 
-    /// The outside world (APIs and storage).
-    ///
-    /// Not required to be `Sized`, so a trait object may be used to narrow what
-    /// this controller can see: `type Env = dyn MirrorWorld`.
+    /// The outside world this controller reads and changes (APIs, storage).
+    /// `?Sized` so a trait object can narrow it, e.g. `type Env = dyn Foo`.
     type Env: ?Sized;
 
-    /// Carries out one action.
+    /// Carries out one action. The only place `Env` may be mutated — guards
+    /// only ever see `&Env`.
     ///
-    /// This is the only place `Env` can be mutated; guards receive `&Env`. Every
-    /// change this controller makes to the world therefore passes through an
-    /// [`Domain::Action`] value that is recorded in [`machine::Taken::actions`] and drawn
-    /// by [`render::to_mermaid`].
-    ///
-    /// `ev` is the event being dispatched. An action may read values from it that
-    /// cannot be baked into an action list — those are `&'static`, so they hold
-    /// compile-time constants only. State-dependent values therefore live in
-    /// `Env`, initialised by a [`machine::State::entry`] action and cleared by a
-    /// [`machine::State::exit`] one.
-    ///
-    /// `Machine` is not reachable from here, so an action cannot trigger a
-    /// transition. Follow-up events are decided by the caller from the returned
-    /// [`machine::Taken`].
+    /// - `action`: the effect to carry out.
+    /// - `ev`: the event being dispatched, for actions that need a runtime
+    ///   value from its payload.
+    /// - `world`: the outside world to mutate.
     fn perform(action: Self::Action, ev: &Self::Event, world: &mut Self::Env);
 
-    /// Every event kind, for gap checking.
-    ///
-    /// The default uses [`Enumerable::ALL`].
+    /// Every event kind, for [`render::coverage`]. Defaults to
+    /// [`Enumerable::ALL`]; override only to check a subset.
     fn all_kinds() -> &'static [Self::EventKind] {
         <Self::EventKind as Enumerable>::ALL
     }
 }
 
-/// One state machine's shape: the [`Domain`] it belongs to and what its states
-/// are.
-///
-/// Kept apart from `Domain` for two reasons. A controller with no states — one
-/// built from [`feature::Feature`] alone — never has to invent a tag enum. And a
-/// controller that needs *several* machines declares one of these per machine
-/// while they all share the same events, actions, guards and
-/// [`Domain::perform`].
+/// One state machine's shape: which [`Domain`] it belongs to and what its
+/// states are. Kept separate from `Domain` so a controller can declare
+/// several machines sharing one domain, or none at all.
 pub trait MachineSpec: Sized + 'static {
     /// The vocabulary this machine works in.
     type Domain: Domain;
 
-    /// State identifier. Payloads live in [`Domain::Event`]; only the tag is here.
-    ///
-    /// Declaring it with [`tags!`] also generates the [`Enumerable`] impl.
+    /// State identifier. [`tags!`] generates this together with its
+    /// [`Enumerable`] impl.
     type Tag: Enumerable;
 
-    /// Every state, for coverage checking.
-    ///
-    /// The default uses [`Enumerable::ALL`]. Override only to check a subset.
+    /// Every state, for [`render::coverage`]. Defaults to [`Enumerable::ALL`];
+    /// override only to check a subset.
     fn all_tags() -> &'static [Self::Tag] {
         <Self::Tag as Enumerable>::ALL
     }

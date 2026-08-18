@@ -2,16 +2,13 @@
 
 use std::fmt::Debug;
 
-/// A type whose values can be enumerated.
+/// A type whose values can all be listed at compile time.
 ///
-/// [`super::render::coverage`] walks `(state × event kind)` exhaustively, which
-/// requires the full value list of both axes. A hand-maintained list is the one
-/// place where forgetting an entry is silent: the combination simply drops out of
-/// the check. [`tags!`] and [`events!`] emit the enum and its `ALL` from the same
-/// declaration so the two cannot drift.
-///
-/// Implementing this by hand is supported; nothing then verifies that `ALL` is
-/// complete.
+/// Required by [`super::MachineSpec::Tag`] and [`super::Domain::EventKind`], whose
+/// full value lists [`super::render::coverage`] needs to walk `(state × event
+/// kind)` exhaustively. Implementing this by hand is supported, but nothing
+/// then verifies `ALL` stays complete as variants are added — prefer [`tags!`]
+/// or [`events!`], which generate the enum and `ALL` together.
 pub trait Enumerable: Copy + Eq + Debug + 'static {
     /// Every value of this type.
     const ALL: &'static [Self];
@@ -19,10 +16,8 @@ pub trait Enumerable: Copy + Eq + Debug + 'static {
 
 /// A type that can report its payload-free kind tag.
 ///
-/// [`super::Domain::Event`] requires this, so the event-to-kind mapping exists in
-/// exactly one place. [`events!`] generates a one-to-one mapping.
-///
-/// Implement it by hand to collapse several event variants into one kind:
+/// Required by [`super::Domain::Event`]. [`events!`] generates a one-to-one impl;
+/// implement it by hand to collapse several event variants into one kind:
 ///
 /// ```ignore
 /// impl chart::HasKind for Event {
@@ -48,6 +43,9 @@ pub trait HasKind {
 
 /// Declares a state tag enum together with its [`Enumerable`] impl.
 ///
+/// Derives `Copy + Clone + PartialEq + Eq + Debug` on the enum and forwards
+/// any outer attributes.
+///
 /// ```ignore
 /// chart::tags! {
 ///     pub enum Tag {
@@ -56,9 +54,6 @@ pub trait HasKind {
 ///     }
 /// }
 /// ```
-///
-/// The `Copy + Eq + Debug` that [`super::MachineSpec::Tag`] requires are derived
-/// automatically. Outer attributes are forwarded to the enum.
 #[macro_export]
 macro_rules! tags {
     (
@@ -87,6 +82,10 @@ macro_rules! tags {
 
 /// Declares an event enum and its kind enum from a single list of variants.
 ///
+/// Generates four items: `enum Event` (the body with payloads, attributes
+/// forwarded), `enum Kind` (the payload-free tag, with `Copy + Eq + Debug`
+/// derived), `impl HasKind for Event`, and `impl Enumerable for Kind`.
+///
 /// ```ignore
 /// chart::events! {
 ///     #[derive(Clone, Debug)]
@@ -96,16 +95,6 @@ macro_rules! tags {
 ///     }
 /// }
 /// ```
-///
-/// Generates four items:
-///
-/// - `enum Event` — the body with payloads. Attributes are forwarded.
-/// - `enum Kind` — the payload-free tag, with `Copy + Eq + Debug` derived.
-/// - `impl HasKind for Event` — used by the executor to classify events.
-/// - `impl Enumerable for Kind` — used by [`super::Domain::all_kinds`].
-///
-/// Written by hand these are four places that must agree; if only the value list
-/// drifts, coverage checking silently narrows.
 #[macro_export]
 macro_rules! events {
     (
