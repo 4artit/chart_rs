@@ -49,8 +49,13 @@ chart::events! {
     enum Event => Kind { Toggle }
 }
 
+/// 이벤트에 대한 반응. 이벤트를 건네받는 것은 이쪽뿐이다.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Action { TurnOn, TurnOff }
+enum Action { Click }
+
+/// 상태에 있다는 사실에서 나오는 효과. 어느 엣지로 들어왔든 실행된다.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum StateAction { TurnOn, TurnOff }
 
 struct Env;
 struct Light;
@@ -59,12 +64,19 @@ impl Domain for Light {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    type StateAction = StateAction;
     type Env = Env;
 
     fn perform(action: Action, _ev: &Event, _world: &mut Env) {
         match action {
-            Action::TurnOn => println!("on"),
-            Action::TurnOff => println!("off"),
+            Action::Click => println!("click"),
+        }
+    }
+
+    fn perform_state(action: StateAction, _world: &mut Env) {
+        match action {
+            StateAction::TurnOn => println!("on"),
+            StateAction::TurnOff => println!("off"),
         }
     }
 }
@@ -75,24 +87,28 @@ impl MachineSpec for Light {
 }
 
 static STATES: &[State<Light>] = &[
-    State { tag: Tag::Off, entry: &[Action::TurnOff], exit: &[] },
-    State { tag: Tag::On,  entry: &[Action::TurnOn],  exit: &[] },
+    State { tag: Tag::Off, entry: &[StateAction::TurnOff], exit: &[] },
+    State { tag: Tag::On,  entry: &[StateAction::TurnOn],  exit: &[] },
 ];
 
 static EDGES: &[Edge<Light>] = &[
     Edge { id: "TURN_ON",  from: Source::These(&[Tag::Off]), when: Kind::Toggle,
-           check: chart::check!(), unknown: OnUnknown::Deny, run: &[], goto: Goto::To(Tag::On) },
+           check: chart::check!(), unknown: OnUnknown::Deny,
+           run: &[Action::Click], goto: Goto::To(Tag::On) },
     Edge { id: "TURN_OFF", from: Source::These(&[Tag::On]),  when: Kind::Toggle,
-           check: chart::check!(), unknown: OnUnknown::Deny, run: &[], goto: Goto::To(Tag::Off) },
+           check: chart::check!(), unknown: OnUnknown::Deny,
+           run: &[Action::Click], goto: Goto::To(Tag::Off) },
 ];
 
 static IGNORES: &[Ignore<Light>] = &[];
 
 fn main() {
     let mut world = Env;
+    // 상태 기계는 시작하는 게 아니라 재개한다. `Tag::Off`는 전등이 이미
+    // 꺼져 있다는 뜻이므로 `Off`의 진입 동작은 여기서 실행되지 않는다.
     let mut m = Machine::new(Tag::Off, STATES, EDGES, IGNORES);
-    m.dispatch(&Event::Toggle, &mut world); // -> on
-    m.dispatch(&Event::Toggle, &mut world); // -> off
+    m.dispatch(&Event::Toggle, &mut world); // -> click, on
+    m.dispatch(&Event::Toggle, &mut world); // -> click, off
 }
 ```
 
@@ -115,9 +131,12 @@ fn main() {
   `True`/`False`/`Unknown` 세 값이고, 판정 불가일 때의 정책은
   `Edge::unknown`에 명시된다 — 가드 함수 안에 숨는 대신 다이어그램에
   드러난다.
-- **추적 가능한 부수효과.** 바깥 세상은 `Domain::perform`에서만 바뀐다.
-  그래서 한 번의 dispatch가 만든 모든 효과는 로그로 남기거나 검증할 수
-  있는 평범한 `Action` 값이다.
+- **추적 가능한 부수효과.** 바깥 세상은 `Domain::perform`과
+  `Domain::perform_state`에서만 바뀐다. 그래서 한 번의 dispatch가 만든 모든
+  효과는 로그로 남기거나 검증할 수 있는 평범한 값이다.
+- **이벤트를 볼 수 없는 진입 동작.** 진입/이탈은 어느 엣지로 들어왔든
+  실행되므로 별도 어휘 `Domain::StateAction`을 쓰고, `perform_state`는 이벤트를
+  받지 않는다 — 이벤트가 필요한 효과는 엣지로 간다.
 
 ## 프로젝트 구조
 

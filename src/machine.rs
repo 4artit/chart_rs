@@ -10,14 +10,23 @@ pub use edge::{Edge, Goto, Ignore, OnUnknown, Source};
 pub use node::{CondNode, Cx, Expr, Memo};
 pub use state::State;
 
-use crate::{ActionOf, Domain, EnvOf, EventOf, HasKind, KindOf, MachineSpec, render};
+use crate::{
+    ActionOf, Domain, EnvOf, EventOf, HasKind, KindOf, MachineSpec, StateActionOf, render,
+};
 
 /// The outcome of one [`Machine::dispatch`] call, for tests and logs.
+///
+/// The three lists are borrowed from the tables and each ran in full. Field
+/// order is execution order.
 pub struct Taken<M: MachineSpec> {
     /// The id of the edge that was selected.
     pub edge: &'static str,
-    /// The actions that ran, in `exit` → `run` → `entry` order.
-    pub actions: Vec<ActionOf<M>>,
+    /// The left state's exit actions. Empty for [`Goto::Internal`].
+    pub exit: &'static [StateActionOf<M>],
+    /// The selected edge's own actions.
+    pub run: &'static [ActionOf<M>],
+    /// The entered state's entry actions. Empty for [`Goto::Internal`].
+    pub entry: &'static [StateActionOf<M>],
 }
 
 // Derives would bound `D` itself; these bound only what is actually used.
@@ -25,26 +34,31 @@ impl<M: MachineSpec> std::fmt::Debug for Taken<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Taken")
             .field("edge", &self.edge)
-            .field("actions", &self.actions)
+            .field("exit", &self.exit)
+            .field("run", &self.run)
+            .field("entry", &self.entry)
             .finish()
     }
 }
 
 impl<M: MachineSpec> Clone for Taken<M> {
     fn clone(&self) -> Self {
-        Self {
-            edge: self.edge,
-            actions: self.actions.clone(),
-        }
+        *self
     }
 }
+
+impl<M: MachineSpec> Copy for Taken<M> {}
 
 impl<M: MachineSpec> PartialEq for Taken<M>
 where
     ActionOf<M>: PartialEq,
+    StateActionOf<M>: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.edge == other.edge && self.actions == other.actions
+        self.edge == other.edge
+            && self.exit == other.exit
+            && self.run == other.run
+            && self.entry == other.entry
     }
 }
 
@@ -60,7 +74,9 @@ pub struct Machine<M: MachineSpec> {
 impl<M: MachineSpec> Machine<M> {
     /// Builds a machine and validates its tables.
     ///
-    /// - `initial`: the starting state tag.
+    /// - `initial`: the state the world is already in, which the caller keeps
+    ///   consistent with `Env`. A machine resumes rather than starts, so its
+    ///   [`State::entry`] does not run and this call does not touch `Env`.
     /// - `states`, `edges`, `ignores`: the transition table, as static slices.
     ///
     /// Returns the constructed machine.
@@ -136,9 +152,9 @@ impl<M: MachineSpec> Machine<M> {
     ///
     /// Effects run in this order: the current state's [`State::exit`] → the
     /// tag changes → `run` → the target state's [`State::entry`]. For
-    /// [`Goto::Internal`] only `run` executes. The initial state's entry
-    /// actions never run on construction; dispatch an explicit init event if
-    /// they're needed.
+    /// [`Goto::Internal`] only `run` executes. Entry and exit go through
+    /// [`Domain::perform_state`], which is not given the event; only `run`
+    /// reaches [`Domain::perform`].
     ///
     /// Not re-entrant: `self` is mutably borrowed for the call, so a nested
     /// dispatch won't compile. Queue follow-up events in the caller instead —
@@ -158,29 +174,40 @@ impl<M: MachineSpec> Machine<M> {
 
         let edge = &self.edges[hit];
         let id = edge.id;
-        let mut actions: Vec<ActionOf<M>> = Vec::new();
+        let run = edge.run;
 
         let target = match edge.goto {
             Goto::To(next) => Some(next),
             Goto::Internal => None,
         };
 
+        // Empty for an internal transition, which stays in its state.
+        let mut exit: &'static [StateActionOf<M>] = &[];
+        let mut entry: &'static [StateActionOf<M>] = &[];
+
         if let Some(next) = target {
-            Self::perform_all(self.state_of(self.tag).exit, ev, world, &mut actions);
+            exit = self.state_of(self.tag).exit;
+            entry = self.state_of(next).entry;
             self.tag = next;
         }
 
-        Self::perform_all(self.edges[hit].run, ev, world, &mut actions);
-
-        if let Some(next) = target {
-            Self::perform_all(self.state_of(next).entry, ev, world, &mut actions);
-        }
+        Self::perform_state_all(exit, world);
+        Self::perform_all(run, ev, world);
+        Self::perform_state_all(entry, world);
 
         // `log::debug!` evaluates its arguments only when the level is enabled,
         // so this formats nothing in a release build with logging off.
-        log::debug!("[chart] {id}: {ev:?} -> {:?} {actions:?}", self.tag);
+        log::debug!(
+            "[chart] {id}: {ev:?} -> {:?} {exit:?} {run:?} {entry:?}",
+            self.tag
+        );
 
-        Some(Taken { edge: id, actions })
+        Some(Taken {
+            edge: id,
+            exit,
+            run,
+            entry,
+        })
     }
 
     /// Index of the first edge matching `kind` from the current state.
@@ -200,16 +227,17 @@ impl<M: MachineSpec> Machine<M> {
         })
     }
 
-    /// Runs each action in `to_run` in order, appending it to `done`.
-    fn perform_all(
-        to_run: &[ActionOf<M>],
-        ev: &EventOf<M>,
-        world: &mut EnvOf<M>,
-        done: &mut Vec<ActionOf<M>>,
-    ) {
+    /// Runs each of an edge's actions in order.
+    fn perform_all(to_run: &[ActionOf<M>], ev: &EventOf<M>, world: &mut EnvOf<M>) {
         for &a in to_run {
             <M::Domain as Domain>::perform(a, ev, world);
-            done.push(a);
+        }
+    }
+
+    /// Runs each of a state's entry or exit actions in order.
+    fn perform_state_all(to_run: &[StateActionOf<M>], world: &mut EnvOf<M>) {
+        for &a in to_run {
+            <M::Domain as Domain>::perform_state(a, world);
         }
     }
 }

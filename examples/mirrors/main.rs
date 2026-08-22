@@ -35,14 +35,20 @@ chart::events! {
     }
 }
 
-/// Carries no payload, which is what the `machine` layer's `&'static [Action]`
-/// requires. Runtime values are read from `ev` or the world inside `perform`.
+/// Effects produced in reaction to an event. Carries no payload, which is what
+/// a `&'static` action list requires — runtime values are read from `ev` or the
+/// world inside `perform`.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     HeatingOn,
     HeatingOff,
     DimmingOn,
     DimmingOff,
+}
+
+/// Effects of the fold machine being in a state, run whichever edge led there.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum StateAction {
     Fold,
     Unfold,
 }
@@ -64,17 +70,24 @@ impl Domain for Mirrors {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    type StateAction = StateAction;
     type Env = World;
 
-    /// The only place the world is touched. Shared by both layers.
+    /// The world is touched here and in `perform_state`, nowhere else.
     fn perform(action: Action, _ev: &Event, world: &mut World) {
         let line = match action {
-            Action::HeatingOn => "heating on".to_string(),
-            Action::HeatingOff => "heating off".to_string(),
-            Action::DimmingOn => "dimming on".to_string(),
-            Action::DimmingOff => "dimming off".to_string(),
-            Action::Fold => format!("fold (speed {:.0})", world.speed),
-            Action::Unfold => "unfold".to_string(),
+            Action::HeatingOn => "heating on",
+            Action::HeatingOff => "heating off",
+            Action::DimmingOn => "dimming on",
+            Action::DimmingOff => "dimming off",
+        };
+        world.effects.push(line.to_string());
+    }
+
+    fn perform_state(action: StateAction, world: &mut World) {
+        let line = match action {
+            StateAction::Fold => format!("fold (speed {:.0})", world.speed),
+            StateAction::Unfold => "unfold".to_string(),
         };
         world.effects.push(line);
     }
@@ -111,12 +124,13 @@ impl Controller {
         // Stateful layer: the machine carries its own out and reports back.
         let taken = self.fold.dispatch(ev, world);
 
+        // Every effect of the fold machine is an entry action.
         match (actions.is_empty(), taken) {
             (true, None) => println!("  -> (nothing)"),
             (false, None) => println!("  -> {actions:?}"),
-            (true, Some(t)) => println!("  -> [fold:{}] {:?}", t.edge, t.actions),
+            (true, Some(t)) => println!("  -> [fold:{}] {:?}", t.edge, t.entry),
             (false, Some(t)) => {
-                println!("  -> {actions:?} + [fold:{}] {:?}", t.edge, t.actions)
+                println!("  -> {actions:?} + [fold:{}] {:?}", t.edge, t.entry)
             }
         }
     }

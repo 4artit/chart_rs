@@ -8,7 +8,7 @@ use chart::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State
 use chart::render::Coverage;
 use chart::{MachineSpec, render};
 
-use crate::{Action, Event, Kind, Mirrors, World};
+use crate::{Event, Kind, Mirrors, StateAction, World};
 
 chart::tags! {
     pub enum FoldTag {
@@ -56,7 +56,7 @@ static STATES: &[State<FoldSm>] = &[
     },
     State {
         tag: FoldTag::Folding,
-        entry: &[Action::Fold],
+        entry: &[StateAction::Fold],
         exit: &[],
     },
     State {
@@ -66,7 +66,7 @@ static STATES: &[State<FoldSm>] = &[
     },
     State {
         tag: FoldTag::Unfolding,
-        entry: &[Action::Unfold],
+        entry: &[StateAction::Unfold],
         exit: &[],
     },
 ];

@@ -56,7 +56,7 @@ struct Env {
     camera_visible: bool,
     performed: Vec<Action>,
     /// The event kind each action was performed for, recorded from `perform`'s
-    /// `ev` argument.
+    /// `ev` argument. Entry and exit add nothing: `perform_state` has no event.
     performed_for: Vec<Kind>,
     /// How many times `SpeedBelowLimit` looked the speed up. Guards receive
     /// `&Env`, so this needs interior mutability.
@@ -69,11 +69,18 @@ impl Domain for RearCam {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    // The feature fixtures below emit the same actions this machine runs on
+    // entry and exit, so the two vocabularies are aliased onto one enum.
+    type StateAction = Action;
     type Env = Env;
 
     fn perform(action: Action, ev: &Event, world: &mut Env) {
-        world.performed.push(action);
         world.performed_for.push(ev.kind());
+        Self::perform_state(action, world);
+    }
+
+    fn perform_state(action: Action, world: &mut Env) {
+        world.performed.push(action);
         match action {
             Action::ShowCamera => world.camera_visible = true,
             Action::HideCamera => world.camera_visible = false,
@@ -206,14 +213,37 @@ fn enters_showing_and_runs_entry_action() {
         .unwrap();
 
     assert_eq!(taken.edge, "CAM_ON");
-    assert_eq!(taken.actions, vec![Action::ShowCamera]);
+    assert_eq!(taken.entry, [Action::ShowCamera]);
+    assert!(taken.exit.is_empty());
+    assert!(taken.run.is_empty());
     assert_eq!(m.tag(), Tag::Showing);
     assert_eq!(w.performed, vec![Action::ShowCamera]);
     assert!(w.camera_visible);
 }
 
-/// `Taken`'s impls are hand-written so that they bound `D::Action` rather than
-/// `D`, which a derive would have required.
+/// `initial` names the state the world is already in, so its entry belongs to a
+/// past run and is not replayed. Its exit still runs on the way out.
+#[test]
+fn the_initial_state_is_resumed_not_entered() {
+    // The world arrives with the camera already on.
+    let mut w = Env {
+        speed: Some(10.0),
+        camera_visible: true,
+        ..Default::default()
+    };
+
+    let mut m = Machine::new(Tag::Showing, STATES, EDGES, IGNORES);
+    assert!(w.performed.is_empty(), "ShowCamera must not be replayed");
+
+    m.dispatch(&Event::GearChanged(Gear::Drive), &mut w)
+        .unwrap();
+
+    assert_eq!(w.performed, vec![Action::HideCamera]);
+    assert!(!w.camera_visible);
+}
+
+/// `Taken`'s impls are hand-written so that they bound the action types rather
+/// than `D`, which a derive would have required.
 #[test]
 fn taken_is_debug_clone_and_eq() {
     let mut m = machine();
@@ -228,7 +258,7 @@ fn taken_is_debug_clone_and_eq() {
 
     assert_eq!(
         format!("{on:?}"),
-        r#"Taken { edge: "CAM_ON", actions: [ShowCamera] }"#
+        r#"Taken { edge: "CAM_ON", exit: [], run: [], entry: [ShowCamera] }"#
     );
     assert_eq!(on.clone(), on);
 
@@ -406,16 +436,16 @@ fn perform_sees_the_event_on_an_internal_transition() {
     assert_eq!(w.performed_for, vec![Kind::SpeedChanged]);
 }
 
+/// The counterpart of the test above: entry and exit go through `perform_state`,
+/// which is handed no event, so nothing lands in `performed_for`.
 #[test]
-fn perform_sees_the_event_for_entry_and_exit_actions() {
+fn entry_and_exit_actions_are_performed_without_an_event() {
     let (mut m, mut w) = showing();
 
-    // on_exit's actions are performed after the transition, but still for the
-    // event that caused it.
     m.dispatch(&Event::GearChanged(Gear::Drive), &mut w);
 
     assert_eq!(w.performed, vec![Action::HideCamera]);
-    assert_eq!(w.performed_for, vec![Kind::GearChanged]);
+    assert!(w.performed_for.is_empty());
 }
 
 #[test]
@@ -570,9 +600,11 @@ impl Domain for PartialCam {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    type StateAction = Action;
     type Env = Env;
 
     fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
+    fn perform_state(_action: Action, _world: &mut Env) {}
 }
 
 impl MachineSpec for PartialCam {
@@ -625,9 +657,11 @@ impl Domain for Broken {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    type StateAction = Action;
     type Env = Env;
 
     fn perform(_action: Action, _ev: &Event, _world: &mut Env) {}
+    fn perform_state(_action: Action, _world: &mut Env) {}
 }
 
 impl MachineSpec for Broken {

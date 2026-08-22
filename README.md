@@ -51,8 +51,13 @@ chart::events! {
     enum Event => Kind { Toggle }
 }
 
+/// Reactions to an event. Only these are handed the event.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum Action { TurnOn, TurnOff }
+enum Action { Click }
+
+/// Effects of being in a state, run whichever edge led there.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum StateAction { TurnOn, TurnOff }
 
 struct Env;
 struct Light;
@@ -61,12 +66,19 @@ impl Domain for Light {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    type StateAction = StateAction;
     type Env = Env;
 
     fn perform(action: Action, _ev: &Event, _world: &mut Env) {
         match action {
-            Action::TurnOn => println!("on"),
-            Action::TurnOff => println!("off"),
+            Action::Click => println!("click"),
+        }
+    }
+
+    fn perform_state(action: StateAction, _world: &mut Env) {
+        match action {
+            StateAction::TurnOn => println!("on"),
+            StateAction::TurnOff => println!("off"),
         }
     }
 }
@@ -77,24 +89,28 @@ impl MachineSpec for Light {
 }
 
 static STATES: &[State<Light>] = &[
-    State { tag: Tag::Off, entry: &[Action::TurnOff], exit: &[] },
-    State { tag: Tag::On,  entry: &[Action::TurnOn],  exit: &[] },
+    State { tag: Tag::Off, entry: &[StateAction::TurnOff], exit: &[] },
+    State { tag: Tag::On,  entry: &[StateAction::TurnOn],  exit: &[] },
 ];
 
 static EDGES: &[Edge<Light>] = &[
     Edge { id: "TURN_ON",  from: Source::These(&[Tag::Off]), when: Kind::Toggle,
-           check: chart::check!(), unknown: OnUnknown::Deny, run: &[], goto: Goto::To(Tag::On) },
+           check: chart::check!(), unknown: OnUnknown::Deny,
+           run: &[Action::Click], goto: Goto::To(Tag::On) },
     Edge { id: "TURN_OFF", from: Source::These(&[Tag::On]),  when: Kind::Toggle,
-           check: chart::check!(), unknown: OnUnknown::Deny, run: &[], goto: Goto::To(Tag::Off) },
+           check: chart::check!(), unknown: OnUnknown::Deny,
+           run: &[Action::Click], goto: Goto::To(Tag::Off) },
 ];
 
 static IGNORES: &[Ignore<Light>] = &[];
 
 fn main() {
     let mut world = Env;
+    // A machine resumes rather than starts: `Tag::Off` says the lamp is
+    // already off, so `Off`'s entry action does not run here.
     let mut m = Machine::new(Tag::Off, STATES, EDGES, IGNORES);
-    m.dispatch(&Event::Toggle, &mut world); // -> on
-    m.dispatch(&Event::Toggle, &mut world); // -> off
+    m.dispatch(&Event::Toggle, &mut world); // -> click, on
+    m.dispatch(&Event::Toggle, &mut world); // -> click, off
 }
 ```
 
@@ -120,9 +136,12 @@ Bigger examples:
   `Unknown` instead of `bool`, and `Edge::unknown` names the fail-open or
   fail-closed policy explicitly — it shows up on the diagram instead of
   hiding inside a guard function.
-- **Traceable side effects.** `Domain::perform` is the only place the outside
-  world is touched, so every effect a dispatch produced is a plain `Action`
-  value you can log or assert on.
+- **Traceable side effects.** `Domain::perform` and `Domain::perform_state` are
+  the only places the outside world is touched, so every effect a dispatch
+  produced is a plain value you can log or assert on.
+- **Entry effects that cannot read the event.** Entry and exit run whichever
+  edge led there, so they have their own vocabulary, `Domain::StateAction`, and
+  `perform_state` is handed no event — an effect that needs one goes on an edge.
 
 ## Project layout
 

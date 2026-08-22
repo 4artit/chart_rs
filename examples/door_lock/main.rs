@@ -4,13 +4,13 @@
 //!
 //! Four states (Locked/Unlocked/Alarm/Maintenance) and seven edges.
 //!
-//! # Where a state-dependent value belongs
+//! # Which vocabulary an effect belongs to
 //!
-//! Everything mutable lives in `Env`, and every write to it is an `Action`. A
-//! value that only matters inside one state is set by that state's `entry` action
-//! and cleared by its `exit` one, so its whole lifecycle is in the tables and on
-//! the diagram: `unlock_code` follows `Unlocked`, and `attempts` is reset on entry
-//! to `Locked` while being incremented by an internal transition.
+//! Everything mutable lives in `Env`, and every write to it is an action. Where
+//! the value comes from decides which kind: `attempts` comes from the state, so
+//! `ResetAttempts` is a `StateAction` on `Locked`'s entry; `unlock_code` comes
+//! from the event, so `Unlock` is an `Action` on the `UNLOCK` edge and only the
+//! clearing is left to `Unlocked`'s exit.
 
 use chart::machine::{Cond, Edge, Goto, Ignore, Machine, OnUnknown, Source, State};
 use chart::{Domain, MachineSpec, render};
@@ -36,13 +36,19 @@ chart::events! {
     }
 }
 
+/// Effects produced in reaction to an event. Only these can read `ev`.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Action {
     Unlock,
-    ClearUnlockCode,
-    Lock,
     Beep,
     IncrementAttempts,
+}
+
+/// Effects of being in a state, run whichever edge led there.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum StateAction {
+    ClearUnlockCode,
+    Lock,
     ResetAttempts,
     SoundAlarm,
     MaintenanceOn,
@@ -54,8 +60,8 @@ struct Env {
     correct_code: u32,
     attempts: u32,
     max_attempts: u32,
-    /// Set by `Unlocked`'s entry action and cleared by its exit one, so it is only
-    /// meaningful while the door is unlocked.
+    /// Set by the `UNLOCK` edge and cleared by `Unlocked`'s exit action, so it is
+    /// only meaningful while the door is unlocked.
     unlock_code: u32,
 }
 
@@ -65,6 +71,7 @@ impl Domain for Door {
     type Event = Event;
     type EventKind = Kind;
     type Action = Action;
+    type StateAction = StateAction;
     type Env = Env;
 
     fn perform(action: Action, ev: &Event, world: &mut Env) {
@@ -75,20 +82,25 @@ impl Domain for Door {
                 }
                 println!("  [action] unlock (code {})", world.unlock_code);
             }
-            Action::ClearUnlockCode => world.unlock_code = 0,
-            Action::Lock => println!("  [action] lock"),
             Action::Beep => println!("  [action] beep (wrong code)"),
             Action::IncrementAttempts => {
                 world.attempts += 1;
                 println!("  [action] attempts = {}", world.attempts);
             }
-            Action::ResetAttempts => {
+        }
+    }
+
+    fn perform_state(action: StateAction, world: &mut Env) {
+        match action {
+            StateAction::ClearUnlockCode => world.unlock_code = 0,
+            StateAction::Lock => println!("  [action] lock"),
+            StateAction::ResetAttempts => {
                 world.attempts = 0;
                 println!("  [action] attempts reset");
             }
-            Action::SoundAlarm => println!("  [action] alarm on"),
-            Action::MaintenanceOn => println!("  [action] maintenance mode on"),
-            Action::MaintenanceOff => println!("  [action] maintenance mode off"),
+            StateAction::SoundAlarm => println!("  [action] alarm on"),
+            StateAction::MaintenanceOn => println!("  [action] maintenance mode on"),
+            StateAction::MaintenanceOff => println!("  [action] maintenance mode off"),
         }
     }
 
@@ -110,28 +122,28 @@ chart::cond_node!(Door, AttemptsExceeded, |cx| Cond::from(
     cx.world.attempts >= cx.world.max_attempts
 ));
 
-// `Unlocked` captures the code it was entered with: `Unlock` reads the payload
-// out of `ev`, and `ClearUnlockCode` drops it again on the way out.
+// `Unlock` reads the payload out of `ev`, so it sits on the `UNLOCK` edge;
+// `ClearUnlockCode` needs no event and drops the code again on the way out.
 static STATES: &[State<Door>] = &[
     State {
         tag: Tag::Locked,
-        entry: &[Action::Lock, Action::ResetAttempts],
+        entry: &[StateAction::Lock, StateAction::ResetAttempts],
         exit: &[],
     },
     State {
         tag: Tag::Unlocked,
-        entry: &[Action::Unlock],
-        exit: &[Action::ClearUnlockCode],
+        entry: &[],
+        exit: &[StateAction::ClearUnlockCode],
     },
     State {
         tag: Tag::Alarm,
-        entry: &[Action::SoundAlarm],
+        entry: &[StateAction::SoundAlarm],
         exit: &[],
     },
     State {
         tag: Tag::Maintenance,
-        entry: &[Action::MaintenanceOn],
-        exit: &[Action::MaintenanceOff],
+        entry: &[StateAction::MaintenanceOn],
+        exit: &[StateAction::MaintenanceOff],
     },
 ];
 
@@ -142,7 +154,8 @@ static EDGES: &[Edge<Door>] = &[
         when: Kind::EnterCode,
         check: chart::check!(CodeCorrect),
         unknown: OnUnknown::Deny,
-        run: &[],
+        // Reads the digits out of `EnterCode`, so it belongs to this edge.
+        run: &[Action::Unlock],
         goto: Goto::To(Tag::Unlocked),
     },
     Edge {
@@ -231,6 +244,8 @@ fn main() {
         max_attempts: 2,
         unlock_code: 0,
     };
+    // A machine resumes: this tag stands in for what a real controller would
+    // read back from the lock, and `Locked`'s entry does not run here.
     let mut m = Machine::new(Tag::Locked, STATES, EDGES, IGNORES);
 
     let steps: &[(&str, Event)] = &[
